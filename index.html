@@ -1584,9 +1584,11 @@
 
             let planId = editingPlanId;
             if (editingPlanId) {
-              await supabase.from('workout_plans').update(planData).eq('id', editingPlanId);
+              const { error: updErr } = await supabase.from('workout_plans').update(planData).eq('id', editingPlanId);
+              if (updErr) throw new Error(updErr.message);
             } else {
-              const { data } = await supabase.from('workout_plans').insert(planData).select().single();
+              const { data, error: insErr } = await supabase.from('workout_plans').insert(planData).select().single();
+              if (insErr) throw new Error(insErr.message);
               planId = data.id;
             }
 
