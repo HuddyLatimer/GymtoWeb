@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+v<!DOCTYPE html>
 <html lang="en" class="scroll-smooth">
 <head>
   <meta charset="UTF-8" />
@@ -1316,22 +1316,54 @@
           (assignments || []).forEach(a => { planCounts[a.client_id] = (planCounts[a.client_id] || 0) + 1; });
 
           list.innerHTML = clients.map(c => `
-            <div class="card card-hover flex items-center justify-between">
-              <div class="flex items-center gap-3">
-                <div class="w-10 h-10 rounded-xl bg-neon/10 flex items-center justify-center">
-                  <i data-lucide="user" class="w-5 h-5 text-neon"></i>
+            <div class="card card-hover">
+              <div class="flex items-center justify-between">
+                <div class="flex items-center gap-3">
+                  <div class="w-10 h-10 rounded-xl bg-neon/10 flex items-center justify-center">
+                    <i data-lucide="user" class="w-5 h-5 text-neon"></i>
+                  </div>
+                  <div>
+                    <div class="font-display font-700 text-white">${esc(c.full_name || 'Unnamed')}</div>
+                    <div class="text-xs text-gray-500">${esc(c.email)} &bull; Joined ${formatDate(c.created_at)}</div>
+                  </div>
                 </div>
-                <div>
-                  <div class="font-display font-700 text-white">${esc(c.full_name || 'Unnamed')}</div>
-                  <div class="text-xs text-gray-500">${esc(c.email)} &bull; Joined ${formatDate(c.created_at)}</div>
+                <div class="flex items-center gap-3">
+                  <div class="flex items-center gap-4 text-xs text-gray-500 hidden sm:flex">
+                    <span>${planCounts[c.id] || 0} plans</span>
+                    <span>${checkinCounts[c.id] || 0} check-ins</span>
+                  </div>
+                  <button class="disconnect-client-btn text-gray-600 hover:text-red-400 transition-colors p-1.5 rounded-lg hover:bg-red-500/10" data-id="${esc(c.id)}" data-name="${esc(c.full_name || c.email)}" title="Disconnect client">
+                    <i data-lucide="user-x" class="w-4 h-4"></i>
+                  </button>
                 </div>
-              </div>
-              <div class="flex items-center gap-4 text-xs text-gray-500">
-                <span>${planCounts[c.id] || 0} plans</span>
-                <span>${checkinCounts[c.id] || 0} check-ins</span>
               </div>
             </div>`).join('');
           lucide.createIcons();
+
+          $$('.disconnect-client-btn').forEach(btn => {
+            btn.onclick = async () => {
+              const clientName = btn.dataset.name;
+              if (!confirm(`Disconnect ${clientName}? This will unlink them from your account and remove all their plan assignments.`)) return;
+              const clientId = btn.dataset.id;
+              try {
+                // Remove plan assignments
+                const { data: myPlans } = await supabase.from('workout_plans').select('id').eq('trainer_id', currentUser.id);
+                if (myPlans?.length) {
+                  await supabase.from('client_workouts').delete()
+                    .eq('client_id', clientId)
+                    .in('plan_id', myPlans.map(p => p.id));
+                }
+                // Unlink client from trainer
+                await supabase.from('profiles').update({ trainer_id: null }).eq('id', clientId);
+                showToast(`${clientName} disconnected`);
+                // Reload the list
+                _routing = false;
+                handleRoute();
+              } catch (err) {
+                showToast('Failed to disconnect: ' + err.message, true);
+              }
+            };
+          });
         } catch (err) {
           console.error('Clients load error:', err);
         }
