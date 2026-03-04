@@ -1,0 +1,10 @@
+{
+  "name": "gymtoweb-sync",
+  "version": "1.0.0",
+  "description": "Gym-to-Web Sync — Client portal for Halifax personal trainers",
+  "private": true,
+  "dependencies": {
+    "stripe": "^14.0.0",
+    "@supabase/supabase-js": "^2.39.0"
+  }
+}

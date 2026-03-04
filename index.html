@@ -1,0 +1,1824 @@
+<!DOCTYPE html>
+<html lang="en" class="scroll-smooth">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Gym-to-Web Sync | Halifax Personal Trainer Client Portal</title>
+  <meta name="description" content="Stop paying for bloated fitness platforms. Gym-to-Web Sync gives Halifax trainers a minimalist, high-performance client portal to host plans and intake forms." />
+  <meta name="keywords" content="Halifax Personal Trainer Website, Fitness Client Portal, Independent Trainer Software NS, Custom Workout Hosting, No-Fee Trainer Platform" />
+  <meta property="og:title" content="Gym-to-Web Sync | Own Your Platform" />
+  <meta property="og:description" content="Stop paying for bloated fitness platforms. Gym-to-Web Sync gives Halifax trainers a minimalist, high-performance client portal to host plans and intake forms." />
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content="https://gymtoweb.netlify.app" />
+  <link rel="canonical" href="https://gymtoweb.netlify.app" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700;800;900&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            neon: '#DFFF00',
+            electric: '#00D4FF',
+            dark: { 900: '#0A0A0B', 800: '#111113', 700: '#1A1A1F', 600: '#242429', 500: '#2E2E35' }
+          },
+          fontFamily: {
+            display: ['Inter Tight', 'sans-serif'],
+            body: ['Plus Jakarta Sans', 'sans-serif'],
+          }
+        }
+      }
+    }
+  </script>
+
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="https://js.stripe.com/v3/"></script>
+
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: 'Plus Jakarta Sans', sans-serif; background: #0A0A0B; color: #E5E5E5; }
+    .font-display { font-family: 'Inter Tight', sans-serif; }
+    .glow-neon { text-shadow: 0 0 20px rgba(223,255,0,0.3), 0 0 40px rgba(223,255,0,0.1); }
+    .glow-box { box-shadow: 0 0 30px rgba(223,255,0,0.08), 0 0 60px rgba(223,255,0,0.04); }
+    .gradient-border { position: relative; background: #111113; border-radius: 1rem; }
+    .gradient-border::before {
+      content: ''; position: absolute; inset: -1px; border-radius: 1rem; padding: 1px;
+      background: linear-gradient(135deg, rgba(223,255,0,0.3), transparent 50%, rgba(0,212,255,0.3));
+      -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+      -webkit-mask-composite: xor; mask-composite: exclude; pointer-events: none;
+    }
+    .grid-bg {
+      background-image: linear-gradient(rgba(223,255,0,0.03) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(223,255,0,0.03) 1px, transparent 1px);
+      background-size: 60px 60px;
+    }
+    @keyframes pulse-neon {
+      0%, 100% { box-shadow: 0 0 20px rgba(223,255,0,0.2); }
+      50% { box-shadow: 0 0 40px rgba(223,255,0,0.4), 0 0 60px rgba(223,255,0,0.1); }
+    }
+    .pulse-neon { animation: pulse-neon 3s ease-in-out infinite; }
+    @keyframes fadeUp { from { opacity:0; transform:translateY(30px); } to { opacity:1; transform:translateY(0); } }
+    .fade-up { animation: fadeUp 0.6s ease-out forwards; opacity: 0; }
+    .delay-1 { animation-delay: 0.1s; } .delay-2 { animation-delay: 0.2s; }
+    .delay-3 { animation-delay: 0.3s; } .delay-4 { animation-delay: 0.4s; }
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: #0A0A0B; }
+    ::-webkit-scrollbar-thumb { background: #2E2E35; border-radius: 3px; }
+    .mobile-nav { transform: translateX(100%); transition: transform 0.3s ease; }
+    .mobile-nav.open { transform: translateX(0); }
+    .tab-active { color: #DFFF00; border-color: #DFFF00; }
+    .tab-inactive { color: #888; border-color: transparent; }
+    .exercise-done .ex-name { text-decoration: line-through; color: #666; }
+    .exercise-done { opacity: 0.6; }
+    .weight-input {
+      width: 55px; background: transparent; border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 6px; padding: 2px 6px; color: #DFFF00; font-size: 11px;
+      text-align: center; font-family: 'Inter Tight', sans-serif; font-weight: 700;
+    }
+    .weight-input:focus { border-color: rgba(223,255,0,0.4); outline: none; }
+    .weight-input::placeholder { color: #444; }
+    .toast {
+      position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(100px);
+      background: #1A1A1F; border: 1px solid rgba(223,255,0,0.3); color: #DFFF00;
+      padding: 12px 24px; border-radius: 12px; font-size: 14px; font-family: 'Inter Tight';
+      font-weight: 600; z-index: 9999; transition: transform 0.3s ease; pointer-events: none;
+    }
+    .toast.show { transform: translateX(-50%) translateY(0); }
+    .toast.error { border-color: rgba(255,100,100,0.4); color: #ff6b6b; }
+    .spinner { display: inline-block; width: 18px; height: 18px; border: 2px solid rgba(255,255,255,0.2);
+      border-top-color: #DFFF00; border-radius: 50%; animation: spin 0.6s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .btn-neon {
+      background: #DFFF00; color: #0A0A0B; font-family: 'Inter Tight'; font-weight: 700;
+      padding: 12px 24px; border-radius: 12px; border: none; cursor: pointer; font-size: 14px;
+      transition: background 0.2s;
+    }
+    .btn-neon:hover { background: #d4f500; }
+    .btn-neon:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-outline {
+      background: transparent; color: #fff; border: 1px solid rgba(255,255,255,0.1);
+      font-family: 'Inter Tight'; font-weight: 600; padding: 10px 20px; border-radius: 12px;
+      cursor: pointer; font-size: 14px; transition: all 0.2s;
+    }
+    .btn-outline:hover { background: rgba(255,255,255,0.05); }
+    .btn-danger {
+      background: transparent; color: #ff6b6b; border: 1px solid rgba(255,100,100,0.2);
+      font-family: 'Inter Tight'; font-weight: 600; padding: 8px 16px; border-radius: 10px;
+      cursor: pointer; font-size: 13px; transition: all 0.2s;
+    }
+    .btn-danger:hover { background: rgba(255,100,100,0.1); }
+    .input {
+      width: 100%; background: #242429; border: 1px solid transparent; border-radius: 10px;
+      padding: 12px 16px; color: #fff; font-size: 14px; font-family: 'Plus Jakarta Sans';
+      transition: border-color 0.2s;
+    }
+    .input:focus { border-color: rgba(223,255,0,0.3); outline: none; }
+    .input::placeholder { color: #555; }
+    select.input { appearance: none; }
+    .card { background: #111113; border: 1px solid rgba(255,255,255,0.05); border-radius: 16px; padding: 24px; }
+    .card-hover:hover { border-color: rgba(223,255,0,0.15); }
+    .sidebar-link {
+      display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-radius: 10px;
+      color: #888; font-size: 14px; font-family: 'Inter Tight'; font-weight: 500;
+      cursor: pointer; transition: all 0.2s; text-decoration: none;
+    }
+    .sidebar-link:hover, .sidebar-link.active { background: rgba(223,255,0,0.05); color: #DFFF00; }
+    @keyframes confettiFall {
+      0% { transform: translateY(0) rotate(0deg); opacity: 1; }
+      100% { transform: translateY(200px) rotate(720deg); opacity: 0; }
+    }
+    .confetti-piece {
+      position: absolute; width: 6px; height: 6px; border-radius: 1px;
+      animation: confettiFall 1.5s ease-out forwards;
+    }
+    #app { min-height: 100vh; }
+  </style>
+</head>
+<body class="antialiased overflow-x-hidden">
+  <div id="toast" class="toast"></div>
+  <div id="app"></div>
+
+  <script>
+  (function() {
+    'use strict';
+
+    // =============================================
+    // CONFIG — Replace these with your actual keys
+    // =============================================
+    const CONFIG = {
+      SUPABASE_URL: 'https://rlztmvzgkldhmebewpfe.supabase.co',
+      SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJsenRtdnpna2xkaG1lYmV3cGZlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI1ODYwODEsImV4cCI6MjA4ODE2MjA4MX0.7EyvUpiAlL7e_opEKX4WQPwqvGueC5HgkOEHG51fndE',
+      STRIPE_PK: 'pk_live_51T74GzE9pJ3VvXPnFZSqMk20Hva5JhpinTiZzNQiwlxWWuUDmvl6BTkswczbYUrkyhjTFVHAB1UelDgG8kONfBqk00UXO02sEB',
+    };
+
+    // =============================================
+    // SUPABASE CLIENT
+    // =============================================
+    const supabase = window.supabase.createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_ANON_KEY);
+    let currentUser = null;
+    let currentProfile = null;
+
+    // =============================================
+    // UTILITIES
+    // =============================================
+    const $ = (sel, ctx = document) => ctx.querySelector(sel);
+    const $$ = (sel, ctx = document) => [...ctx.querySelectorAll(sel)];
+    const YEAR = new Date().getFullYear();
+    const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    const DAYS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+
+    function showToast(msg, isError = false) {
+      const t = document.getElementById('toast');
+      t.textContent = msg;
+      t.className = 'toast show' + (isError ? ' error' : '');
+      setTimeout(() => t.className = 'toast', 3000);
+    }
+
+    function formatDate(d) {
+      const dt = new Date(d);
+      return `${MONTHS[dt.getMonth()]} ${dt.getDate()}, ${dt.getFullYear()}`;
+    }
+
+    function timeAgo(d) {
+      const diff = Date.now() - new Date(d).getTime();
+      const mins = Math.floor(diff / 60000);
+      if (mins < 1) return 'just now';
+      if (mins < 60) return `${mins}m ago`;
+      const hrs = Math.floor(mins / 60);
+      if (hrs < 24) return `${hrs}h ago`;
+      return `${Math.floor(hrs / 24)}d ago`;
+    }
+
+    function triggerConfetti(el) {
+      const colors = ['#DFFF00', '#00D4FF', '#FF6B6B', '#FFD93D', '#6BCB77'];
+      const rect = el.getBoundingClientRect();
+      for (let i = 0; i < 30; i++) {
+        const p = document.createElement('div');
+        p.className = 'confetti-piece';
+        p.style.left = (rect.left + rect.width/2 + (Math.random()-0.5)*120) + 'px';
+        p.style.top = (rect.top + window.scrollY) + 'px';
+        p.style.background = colors[Math.floor(Math.random()*colors.length)];
+        p.style.animationDuration = (1+Math.random()) + 's';
+        document.body.appendChild(p);
+        setTimeout(() => p.remove(), 2000);
+      }
+    }
+
+    // =============================================
+    // ROUTER
+    // =============================================
+    const routes = {};
+    function route(path, handler) { routes[path] = handler; }
+
+    function navigate(path) {
+      window.location.hash = path;
+    }
+
+    function getRoute() {
+      const hash = window.location.hash.slice(1) || '/';
+      return hash;
+    }
+
+    function matchRoute(path) {
+      // Try exact match first
+      if (routes[path]) return { handler: routes[path], params: {} };
+      // Try parameterized routes
+      for (const [pattern, handler] of Object.entries(routes)) {
+        const patternParts = pattern.split('/');
+        const pathParts = path.split('/');
+        if (patternParts.length !== pathParts.length) continue;
+        const params = {};
+        let match = true;
+        for (let i = 0; i < patternParts.length; i++) {
+          if (patternParts[i].startsWith(':')) {
+            params[patternParts[i].slice(1)] = pathParts[i];
+          } else if (patternParts[i] !== pathParts[i]) {
+            match = false; break;
+          }
+        }
+        if (match) return { handler, params };
+      }
+      return null;
+    }
+
+    async function handleRoute() {
+      const path = getRoute();
+      const app = document.getElementById('app');
+
+      // Check auth state
+      const { data: { session } } = await supabase.auth.getSession();
+      currentUser = session?.user || null;
+
+      if (currentUser) {
+        const { data } = await supabase.from('profiles').select('*').eq('id', currentUser.id).single();
+        currentProfile = data;
+      } else {
+        currentProfile = null;
+      }
+
+      const matched = matchRoute(path);
+      if (matched) {
+        await matched.handler(app, matched.params);
+      } else {
+        app.innerHTML = render404();
+      }
+      lucide.createIcons();
+    }
+
+    window.addEventListener('hashchange', handleRoute);
+
+    function render404() {
+      return `
+        <div class="min-h-screen flex items-center justify-center">
+          <div class="text-center">
+            <div class="font-display font-900 text-6xl text-neon mb-4">404</div>
+            <p class="text-gray-400 mb-6">Page not found</p>
+            <a href="#/" class="btn-neon inline-block">Back Home</a>
+          </div>
+        </div>`;
+    }
+
+    // =============================================
+    // AUTH GUARDS
+    // =============================================
+    function requireAuth(app) {
+      if (!currentUser) { navigate('/login'); return false; }
+      return true;
+    }
+    function requireTrainer(app) {
+      if (!requireAuth(app)) return false;
+      if (currentProfile?.role !== 'trainer') { navigate('/portal'); return false; }
+      return true;
+    }
+    function requirePaid(app) {
+      if (!requireTrainer(app)) return false;
+      if (!currentProfile?.has_paid) { navigate('/checkout'); return false; }
+      return true;
+    }
+    function requireClient(app) {
+      if (!requireAuth(app)) return false;
+      if (currentProfile?.role !== 'client') { navigate('/dashboard'); return false; }
+      return true;
+    }
+
+    // =============================================
+    // SHARED COMPONENTS
+    // =============================================
+    function navBar(loggedIn = false) {
+      if (loggedIn) {
+        const isTrainer = currentProfile?.role === 'trainer';
+        const homeLink = isTrainer ? '#/dashboard' : '#/portal';
+        return `
+        <nav class="fixed top-0 left-0 right-0 z-50 bg-dark-900/80 backdrop-blur-xl border-b border-white/5">
+          <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex items-center justify-between h-16">
+              <a href="${homeLink}" class="flex items-center gap-2">
+                <div class="w-8 h-8 rounded-lg bg-neon/10 border border-neon/30 flex items-center justify-center">
+                  <i data-lucide="zap" class="w-4 h-4 text-neon"></i>
+                </div>
+                <span class="font-display font-800 text-lg"><span class="text-white">Gym</span><span class="text-neon">to</span><span class="text-white">Web</span></span>
+              </a>
+              <div class="flex items-center gap-4">
+                <span class="text-sm text-gray-400 hidden sm:inline">${currentProfile?.full_name || currentUser?.email}</span>
+                <button onclick="window.GTW.logout()" class="text-sm text-gray-500 hover:text-red-400 transition-colors flex items-center gap-1">
+                  <i data-lucide="log-out" class="w-4 h-4"></i>
+                  <span class="hidden sm:inline">Logout</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </nav>`;
+      }
+      return `
+      <nav class="fixed top-0 left-0 right-0 z-50 bg-dark-900/80 backdrop-blur-xl border-b border-white/5">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div class="flex items-center justify-between h-16 sm:h-20">
+            <a href="#/" class="flex items-center gap-2 group">
+              <div class="w-8 h-8 sm:w-10 sm:h-10 rounded-lg bg-neon/10 border border-neon/30 flex items-center justify-center group-hover:bg-neon/20 transition-colors">
+                <i data-lucide="zap" class="w-4 h-4 sm:w-5 sm:h-5 text-neon"></i>
+              </div>
+              <span class="font-display font-800 text-lg sm:text-xl tracking-tight"><span class="text-white">Gym</span><span class="text-neon">to</span><span class="text-white">Web</span></span>
+            </a>
+            <div class="hidden md:flex items-center gap-8">
+              <a href="#/" class="text-sm text-gray-400 hover:text-white transition-colors">Home</a>
+              <a href="#/login" class="text-sm text-gray-400 hover:text-white transition-colors">Login</a>
+              <a href="#/signup" class="bg-neon text-dark-900 font-display font-700 text-sm px-5 py-2.5 rounded-lg hover:bg-neon/90 transition-colors">Get Started</a>
+            </div>
+            <button id="menu-btn-main" class="md:hidden p-2 text-gray-400 hover:text-white"><i data-lucide="menu" class="w-6 h-6"></i></button>
+          </div>
+        </div>
+        <div id="mobile-nav-main" class="mobile-nav fixed inset-y-0 right-0 w-72 bg-dark-800 border-l border-white/5 z-50 p-6 md:hidden">
+          <button id="close-nav-main" class="absolute top-5 right-5 text-gray-400 hover:text-white"><i data-lucide="x" class="w-6 h-6"></i></button>
+          <div class="flex flex-col gap-6 mt-16">
+            <a href="#/" class="text-lg text-gray-300 hover:text-white nav-close">Home</a>
+            <a href="#/login" class="text-lg text-gray-300 hover:text-white nav-close">Login</a>
+            <a href="#/signup" class="bg-neon text-dark-900 font-display font-700 text-center text-lg px-5 py-3 rounded-lg nav-close">Get Started</a>
+          </div>
+        </div>
+      </nav>`;
+    }
+
+    function footer() {
+      return `
+      <footer class="border-t border-white/5 py-10">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div class="flex flex-col sm:flex-row items-center justify-between gap-4">
+            <div class="flex items-center gap-2">
+              <div class="w-8 h-8 rounded-lg bg-neon/10 border border-neon/30 flex items-center justify-center">
+                <i data-lucide="zap" class="w-4 h-4 text-neon"></i>
+              </div>
+              <span class="font-display font-800 text-lg"><span class="text-white">Gym</span><span class="text-neon">to</span><span class="text-white">Web</span></span>
+            </div>
+            <div class="text-sm text-gray-600">&copy; ${YEAR} Gym-to-Web Sync &bull; Halifax, NS</div>
+          </div>
+        </div>
+      </footer>`;
+    }
+
+    function initMobileNav() {
+      setTimeout(() => {
+        const btn = document.getElementById('menu-btn-main');
+        const nav = document.getElementById('mobile-nav-main');
+        const close = document.getElementById('close-nav-main');
+        if (btn && nav) {
+          btn.onclick = () => nav.classList.add('open');
+          close.onclick = () => nav.classList.remove('open');
+          $$('.nav-close', nav).forEach(l => l.onclick = () => nav.classList.remove('open'));
+        }
+      }, 0);
+    }
+
+    // =============================================
+    // ROUTE: LANDING PAGE (#/)
+    // =============================================
+    route('/', (app) => {
+      if (currentUser) {
+        navigate(currentProfile?.role === 'trainer' ? '/dashboard' : '/portal');
+        return;
+      }
+      app.innerHTML = `
+      ${navBar(false)}
+      <!-- HERO -->
+      <section class="relative min-h-screen flex items-center grid-bg pt-20">
+        <div class="absolute top-1/4 -left-32 w-96 h-96 bg-neon/5 rounded-full blur-3xl pointer-events-none"></div>
+        <div class="absolute bottom-1/4 -right-32 w-96 h-96 bg-electric/5 rounded-full blur-3xl pointer-events-none"></div>
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-16 sm:py-24">
+          <div class="max-w-4xl">
+            <div class="fade-up inline-flex items-center gap-2 bg-dark-700 border border-white/10 rounded-full px-4 py-1.5 mb-6 sm:mb-8">
+              <span class="w-2 h-2 bg-neon rounded-full animate-pulse"></span>
+              <span class="text-xs sm:text-sm text-gray-400 font-medium">Built for Halifax Trainers &bull; ${YEAR}</span>
+            </div>
+            <h1 class="fade-up delay-1 font-display font-900 text-4xl sm:text-5xl md:text-6xl lg:text-7xl leading-[1.05] tracking-tight mb-6">
+              Stop Renting.<br /><span class="text-neon glow-neon">Own Your Platform.</span>
+            </h1>
+            <p class="fade-up delay-2 text-lg sm:text-xl text-gray-400 max-w-2xl mb-8 sm:mb-10 leading-relaxed">
+              Ditch the $50/month fitness SaaS bloat. Get a custom, branded client portal with
+              workout plans & intake forms &mdash; built once, owned forever.
+            </p>
+            <div class="fade-up delay-3 flex flex-col sm:flex-row gap-4">
+              <a href="#/signup" class="pulse-neon bg-neon text-dark-900 font-display font-700 text-base sm:text-lg px-8 py-4 rounded-xl text-center hover:bg-neon/90 transition-colors">
+                Build My Portal
+              </a>
+              <a href="#/login" class="border border-white/10 text-white font-display font-600 text-base sm:text-lg px-8 py-4 rounded-xl text-center hover:bg-white/5 transition-colors flex items-center justify-center gap-2">
+                <i data-lucide="log-in" class="w-5 h-5"></i> Trainer Login
+              </a>
+            </div>
+            <div class="fade-up delay-4 grid grid-cols-3 gap-6 sm:gap-12 mt-12 sm:mt-16 pt-8 sm:pt-12 border-t border-white/5">
+              <div><div class="font-display font-800 text-2xl sm:text-4xl text-white">$0</div><div class="text-xs sm:text-sm text-gray-500 mt-1">Monthly Fees</div></div>
+              <div><div class="font-display font-800 text-2xl sm:text-4xl text-white">&lt;1s</div><div class="text-xs sm:text-sm text-gray-500 mt-1">Load Time</div></div>
+              <div><div class="font-display font-800 text-2xl sm:text-4xl text-white">100%</div><div class="text-xs sm:text-sm text-gray-500 mt-1">Your Brand</div></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- FEATURES -->
+      <section class="relative py-20 sm:py-32">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div class="text-center max-w-3xl mx-auto mb-16">
+            <h2 class="font-display font-800 text-3xl sm:text-4xl md:text-5xl tracking-tight mb-6">You're a Trainer,<br />Not a <span class="text-neon">Subscriber</span>.</h2>
+            <p class="text-gray-400 text-base sm:text-lg">Platforms like Trainerize charge $50&ndash;$150/month for features you'll never use. Your clients just need their plan and a way to check in.</p>
+          </div>
+          <div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
+            ${[
+              {icon:'layout-dashboard',color:'neon',title:'Branded Portal',desc:'Your logo, your colors, your domain. Clients see your brand.'},
+              {icon:'dumbbell',color:'electric',title:'Workout Hosting',desc:'Clean tables for sets, reps, and tempo. No more emailing PDFs.'},
+              {icon:'clipboard-check',color:'neon',title:'Intake Forms',desc:'Secure check-in forms for goals, injuries, and progress.'},
+              {icon:'smartphone',color:'electric',title:'Mobile-First',desc:'Designed for the gym floor. Pull up plans on any phone.'},
+              {icon:'gauge',color:'neon',title:'Blazing Fast',desc:'Sub-1-second load times. No frameworks, no bloat.'},
+              {icon:'shield-check',color:'electric',title:'You Own It',desc:'No vendor lock-in. Your code, your hosting, your data.'},
+            ].map(f => `
+              <div class="gradient-border p-6 sm:p-8 hover:bg-dark-700/50 transition-colors group">
+                <div class="w-12 h-12 rounded-xl bg-${f.color}/10 border border-${f.color}/20 flex items-center justify-center mb-5 group-hover:bg-${f.color}/20 transition-colors">
+                  <i data-lucide="${f.icon}" class="w-6 h-6 text-${f.color}"></i>
+                </div>
+                <h3 class="font-display font-700 text-lg sm:text-xl mb-3">${f.title}</h3>
+                <p class="text-gray-400 text-sm leading-relaxed">${f.desc}</p>
+              </div>`).join('')}
+          </div>
+        </div>
+      </section>
+
+      <!-- PRICING -->
+      <section class="relative py-20 sm:py-32">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div class="text-center max-w-3xl mx-auto mb-12">
+            <h2 class="font-display font-800 text-3xl sm:text-4xl md:text-5xl tracking-tight mb-6">One Price. <span class="text-neon">Own It Forever.</span></h2>
+          </div>
+          <div class="grid md:grid-cols-2 gap-6 max-w-4xl mx-auto">
+            <div class="bg-dark-800 rounded-2xl border border-white/5 p-6 sm:p-8 relative overflow-hidden">
+              <div class="absolute top-0 right-0 bg-red-500/10 text-red-400 text-xs font-display font-700 px-4 py-1.5 rounded-bl-xl">THE OLD WAY</div>
+              <div class="mt-6">
+                <div class="text-gray-500 text-sm mb-2">Typical SaaS Platform</div>
+                <div class="flex items-baseline gap-1 mb-1"><span class="font-display font-900 text-4xl sm:text-5xl text-white">$75</span><span class="text-gray-500 text-lg">/mo</span></div>
+                <div class="text-red-400 text-sm font-medium mb-6">= $900/year &bull; $4,500 over 5 years</div>
+                ${['Their branding, not yours','Features you\'ll never use','Price increases every year','Lose everything if you cancel','Vendor lock-in on your data'].map(t =>
+                  `<div class="flex items-center gap-3 text-sm text-gray-400 mb-2"><i data-lucide="x" class="w-4 h-4 text-red-400 flex-shrink-0"></i><span>${t}</span></div>`).join('')}
+              </div>
+            </div>
+            <div class="bg-dark-800 rounded-2xl border border-neon/20 p-6 sm:p-8 relative overflow-hidden glow-box">
+              <div class="absolute top-0 right-0 bg-neon/10 text-neon text-xs font-display font-700 px-4 py-1.5 rounded-bl-xl">GYM-TO-WEB</div>
+              <div class="mt-6">
+                <div class="text-neon text-sm font-medium mb-2">One-Time Setup</div>
+                <div class="flex items-baseline gap-1 mb-1"><span class="font-display font-900 text-4xl sm:text-5xl text-white">$497</span><span class="text-gray-500 text-lg">once</span></div>
+                <div class="text-neon text-sm font-medium mb-6">= Pays for itself in 7 months</div>
+                ${['Fully branded to your business','Client workout portal','Intake & check-in forms','Mobile-first, sub-1s loads','You own the code forever','Free hosting setup included'].map(t =>
+                  `<div class="flex items-center gap-3 text-sm text-gray-300 mb-2"><i data-lucide="check" class="w-4 h-4 text-neon flex-shrink-0"></i><span>${t}</span></div>`).join('')}
+                <a href="#/signup" class="block mt-6 bg-neon text-dark-900 font-display font-700 text-center text-base py-3.5 rounded-xl hover:bg-neon/90 transition-colors">Build My Portal</a>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- LOCAL -->
+      <section class="relative py-20 sm:py-32">
+        <div class="absolute inset-0 grid-bg opacity-30"></div>
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 relative">
+          <div class="text-center max-w-3xl mx-auto mb-12">
+            <h2 class="font-display font-800 text-3xl sm:text-4xl md:text-5xl tracking-tight mb-6">Built for <span class="text-neon">Nova Scotia</span> Trainers</h2>
+            <p class="text-gray-400 text-base sm:text-lg">Whether you're running sessions in the North End, coaching at a Spring Garden gym, or training clients at the waterfront.</p>
+          </div>
+          <div class="grid sm:grid-cols-3 gap-4 sm:gap-6 max-w-4xl mx-auto">
+            ${[
+              {icon:'building-2',color:'neon',title:'North End Studios',desc:'Independent trainers from Gottingen to Agricola.'},
+              {icon:'trees',color:'electric',title:'South End & Parks',desc:'Bootcamp coaches at Point Pleasant and Spring Garden.'},
+              {icon:'dumbbell',color:'neon',title:'Dartmouth & Beyond',desc:'Serving the full HRM — Dartmouth, Bedford, Sackville.'},
+            ].map(f => `
+              <div class="gradient-border p-6 text-center">
+                <div class="w-14 h-14 rounded-2xl bg-${f.color}/10 border border-${f.color}/20 flex items-center justify-center mx-auto mb-4">
+                  <i data-lucide="${f.icon}" class="w-7 h-7 text-${f.color}"></i>
+                </div>
+                <h3 class="font-display font-700 text-lg mb-2">${f.title}</h3>
+                <p class="text-gray-500 text-sm">${f.desc}</p>
+              </div>`).join('')}
+          </div>
+        </div>
+      </section>
+
+      <!-- CTA -->
+      <section class="relative py-20 sm:py-32">
+        <div class="absolute inset-0 grid-bg"></div>
+        <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] bg-neon/5 rounded-full blur-3xl pointer-events-none"></div>
+        <div class="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 relative text-center">
+          <h2 class="font-display font-900 text-3xl sm:text-4xl md:text-5xl lg:text-6xl tracking-tight mb-6">Ready to <span class="text-neon glow-neon">Own</span> Your Platform?</h2>
+          <p class="text-gray-400 text-base sm:text-lg mb-10 max-w-2xl mx-auto">Join Halifax trainers who stopped renting and started owning. Get your custom client portal built and live in under a week.</p>
+          <a href="#/signup" class="pulse-neon bg-neon text-dark-900 font-display font-700 text-lg px-10 py-4 rounded-xl inline-block hover:bg-neon/90 transition-colors">Build My Portal</a>
+        </div>
+      </section>
+      ${footer()}`;
+      initMobileNav();
+    });
+
+    // =============================================
+    // ROUTE: LOGIN (#/login)
+    // =============================================
+    route('/login', (app) => {
+      if (currentUser) {
+        navigate(currentProfile?.role === 'trainer' ? '/dashboard' : '/portal');
+        return;
+      }
+      app.innerHTML = `
+      ${navBar(false)}
+      <div class="min-h-screen flex items-center justify-center pt-20 px-4">
+        <div class="w-full max-w-md">
+          <div class="text-center mb-8">
+            <div class="w-14 h-14 rounded-2xl bg-neon/10 border border-neon/30 flex items-center justify-center mx-auto mb-4">
+              <i data-lucide="log-in" class="w-7 h-7 text-neon"></i>
+            </div>
+            <h1 class="font-display font-800 text-3xl mb-2">Welcome Back</h1>
+            <p class="text-gray-500">Log in to your Gym-to-Web portal</p>
+          </div>
+          <form id="login-form" class="card space-y-4">
+            <div>
+              <label class="text-xs text-gray-400 font-medium block mb-1.5">Email</label>
+              <input type="email" id="login-email" class="input" placeholder="you@example.com" required />
+            </div>
+            <div>
+              <label class="text-xs text-gray-400 font-medium block mb-1.5">Password</label>
+              <input type="password" id="login-password" class="input" placeholder="Your password" required />
+            </div>
+            <button type="submit" id="login-btn" class="btn-neon w-full">Log In</button>
+            <div class="flex items-center justify-between text-sm">
+              <button type="button" id="forgot-btn" class="text-electric hover:underline">Forgot password?</button>
+              <a href="#/signup" class="text-gray-400 hover:text-white">Create account</a>
+            </div>
+            <div id="login-error" class="text-red-400 text-sm text-center hidden"></div>
+          </form>
+        </div>
+      </div>`;
+      initMobileNav();
+
+      setTimeout(() => {
+        const form = document.getElementById('login-form');
+        form.onsubmit = async (e) => {
+          e.preventDefault();
+          const btn = document.getElementById('login-btn');
+          const errEl = document.getElementById('login-error');
+          btn.innerHTML = '<span class="spinner"></span>';
+          btn.disabled = true;
+          errEl.classList.add('hidden');
+
+          const { error } = await supabase.auth.signInWithPassword({
+            email: document.getElementById('login-email').value,
+            password: document.getElementById('login-password').value,
+          });
+
+          if (error) {
+            errEl.textContent = error.message;
+            errEl.classList.remove('hidden');
+            btn.textContent = 'Log In';
+            btn.disabled = false;
+          } else {
+            showToast('Welcome back!');
+            await handleRoute();
+          }
+        };
+
+        document.getElementById('forgot-btn').onclick = async () => {
+          const email = document.getElementById('login-email').value;
+          if (!email) { showToast('Enter your email first', true); return; }
+          const { error } = await supabase.auth.resetPasswordForEmail(email, {
+            redirectTo: window.location.origin + '/#/login',
+          });
+          if (error) showToast(error.message, true);
+          else showToast('Password reset email sent!');
+        };
+      }, 0);
+    });
+
+    // =============================================
+    // ROUTE: SIGNUP (#/signup)
+    // =============================================
+    route('/signup', (app) => {
+      if (currentUser) { navigate('/'); return; }
+      app.innerHTML = `
+      ${navBar(false)}
+      <div class="min-h-screen flex items-center justify-center pt-20 px-4">
+        <div class="w-full max-w-md">
+          <div class="text-center mb-8">
+            <div class="w-14 h-14 rounded-2xl bg-neon/10 border border-neon/30 flex items-center justify-center mx-auto mb-4">
+              <i data-lucide="user-plus" class="w-7 h-7 text-neon"></i>
+            </div>
+            <h1 class="font-display font-800 text-3xl mb-2">Get Started</h1>
+            <p class="text-gray-500">Create your Gym-to-Web account</p>
+          </div>
+          <form id="signup-form" class="card space-y-4">
+            <div>
+              <label class="text-xs text-gray-400 font-medium block mb-1.5">I am a...</label>
+              <div class="grid grid-cols-2 gap-3">
+                <button type="button" class="role-btn border border-neon/30 bg-neon/10 text-neon rounded-xl py-3 font-display font-700 text-sm" data-role="trainer">
+                  <i data-lucide="dumbbell" class="w-5 h-5 mx-auto mb-1"></i> Trainer
+                </button>
+                <button type="button" class="role-btn border border-white/10 bg-dark-600 text-gray-400 rounded-xl py-3 font-display font-700 text-sm" data-role="client">
+                  <i data-lucide="user" class="w-5 h-5 mx-auto mb-1"></i> Client
+                </button>
+              </div>
+            </div>
+            <div>
+              <label class="text-xs text-gray-400 font-medium block mb-1.5">Full Name</label>
+              <input type="text" id="signup-name" class="input" placeholder="Your name" required />
+            </div>
+            <div>
+              <label class="text-xs text-gray-400 font-medium block mb-1.5">Email</label>
+              <input type="email" id="signup-email" class="input" placeholder="you@example.com" required />
+            </div>
+            <div>
+              <label class="text-xs text-gray-400 font-medium block mb-1.5">Password</label>
+              <input type="password" id="signup-password" class="input" placeholder="Min 6 characters" required minlength="6" />
+            </div>
+            <div id="invite-field" class="hidden">
+              <label class="text-xs text-gray-400 font-medium block mb-1.5">Trainer Invite Code</label>
+              <input type="text" id="signup-invite" class="input" placeholder="Enter code from your trainer" />
+            </div>
+            <button type="submit" id="signup-btn" class="btn-neon w-full">Create Account</button>
+            <p class="text-center text-sm text-gray-500">Already have an account? <a href="#/login" class="text-electric hover:underline">Log in</a></p>
+            <div id="signup-error" class="text-red-400 text-sm text-center hidden"></div>
+          </form>
+        </div>
+      </div>`;
+      initMobileNav();
+
+      setTimeout(() => {
+        let selectedRole = 'trainer';
+        $$('.role-btn').forEach(btn => {
+          btn.onclick = () => {
+            selectedRole = btn.dataset.role;
+            $$('.role-btn').forEach(b => {
+              b.className = b.dataset.role === selectedRole
+                ? 'role-btn border border-neon/30 bg-neon/10 text-neon rounded-xl py-3 font-display font-700 text-sm'
+                : 'role-btn border border-white/10 bg-dark-600 text-gray-400 rounded-xl py-3 font-display font-700 text-sm';
+            });
+            document.getElementById('invite-field').classList.toggle('hidden', selectedRole !== 'client');
+            lucide.createIcons();
+          };
+        });
+
+        document.getElementById('signup-form').onsubmit = async (e) => {
+          e.preventDefault();
+          const btn = document.getElementById('signup-btn');
+          const errEl = document.getElementById('signup-error');
+          btn.innerHTML = '<span class="spinner"></span>';
+          btn.disabled = true;
+          errEl.classList.add('hidden');
+
+          const { data, error } = await supabase.auth.signUp({
+            email: document.getElementById('signup-email').value,
+            password: document.getElementById('signup-password').value,
+            options: {
+              data: {
+                full_name: document.getElementById('signup-name').value,
+                role: selectedRole,
+              }
+            }
+          });
+
+          if (error) {
+            errEl.textContent = error.message;
+            errEl.classList.remove('hidden');
+            btn.textContent = 'Create Account';
+            btn.disabled = false;
+            return;
+          }
+
+          // If client, link to trainer via invite code
+          if (selectedRole === 'client') {
+            const inviteCode = document.getElementById('signup-invite').value.trim();
+            if (inviteCode) {
+              const { error: linkErr } = await supabase.rpc('link_client_to_trainer', { code: inviteCode });
+              if (linkErr) showToast('Could not link to trainer: ' + linkErr.message, true);
+            }
+          }
+
+          if (data.user && !data.session) {
+            // Email confirmation required
+            showToast('Check your email to confirm your account!');
+            navigate('/login');
+          } else {
+            showToast('Account created!');
+            await handleRoute();
+          }
+        };
+      }, 0);
+    });
+
+    // =============================================
+    // ROUTE: CLIENT INVITE SIGNUP (#/signup/client/:code)
+    // =============================================
+    route('/signup/client/:code', (app, params) => {
+      if (currentUser) { navigate('/'); return; }
+      app.innerHTML = `
+      ${navBar(false)}
+      <div class="min-h-screen flex items-center justify-center pt-20 px-4">
+        <div class="w-full max-w-md">
+          <div class="text-center mb-8">
+            <div class="w-14 h-14 rounded-2xl bg-electric/10 border border-electric/30 flex items-center justify-center mx-auto mb-4">
+              <i data-lucide="user-plus" class="w-7 h-7 text-electric"></i>
+            </div>
+            <h1 class="font-display font-800 text-3xl mb-2">Join Your Trainer</h1>
+            <p class="text-gray-500">Create your client portal account</p>
+          </div>
+          <form id="invite-signup-form" class="card space-y-4">
+            <div class="bg-dark-600 rounded-lg px-4 py-3 flex items-center gap-2">
+              <i data-lucide="link" class="w-4 h-4 text-electric"></i>
+              <span class="text-sm text-electric font-display font-600">Invite: ${params.code}</span>
+            </div>
+            <div>
+              <label class="text-xs text-gray-400 font-medium block mb-1.5">Full Name</label>
+              <input type="text" id="inv-name" class="input" placeholder="Your name" required />
+            </div>
+            <div>
+              <label class="text-xs text-gray-400 font-medium block mb-1.5">Email</label>
+              <input type="email" id="inv-email" class="input" placeholder="you@example.com" required />
+            </div>
+            <div>
+              <label class="text-xs text-gray-400 font-medium block mb-1.5">Password</label>
+              <input type="password" id="inv-password" class="input" placeholder="Min 6 characters" required minlength="6" />
+            </div>
+            <button type="submit" id="inv-btn" class="btn-neon w-full">Create Client Account</button>
+            <div id="inv-error" class="text-red-400 text-sm text-center hidden"></div>
+          </form>
+        </div>
+      </div>`;
+      initMobileNav();
+
+      setTimeout(() => {
+        document.getElementById('invite-signup-form').onsubmit = async (e) => {
+          e.preventDefault();
+          const btn = document.getElementById('inv-btn');
+          const errEl = document.getElementById('inv-error');
+          btn.innerHTML = '<span class="spinner"></span>';
+          btn.disabled = true;
+          errEl.classList.add('hidden');
+
+          const { data, error } = await supabase.auth.signUp({
+            email: document.getElementById('inv-email').value,
+            password: document.getElementById('inv-password').value,
+            options: { data: { full_name: document.getElementById('inv-name').value, role: 'client' } }
+          });
+
+          if (error) {
+            errEl.textContent = error.message;
+            errEl.classList.remove('hidden');
+            btn.textContent = 'Create Client Account';
+            btn.disabled = false;
+            return;
+          }
+
+          // Link to trainer
+          if (data.session) {
+            await supabase.rpc('link_client_to_trainer', { code: params.code });
+          }
+
+          if (data.user && !data.session) {
+            showToast('Check your email to confirm!');
+            navigate('/login');
+          } else {
+            showToast('Welcome! You\'re linked to your trainer.');
+            await handleRoute();
+          }
+        };
+      }, 0);
+    });
+
+    // =============================================
+    // ROUTE: CHECKOUT (#/checkout)
+    // =============================================
+    route('/checkout', async (app) => {
+      if (!requireAuth(app)) return;
+      if (currentProfile?.has_paid) { navigate('/dashboard'); return; }
+
+      app.innerHTML = `
+      ${navBar(true)}
+      <div class="min-h-screen flex items-center justify-center pt-20 px-4">
+        <div class="w-full max-w-lg">
+          <div class="text-center mb-8">
+            <div class="w-14 h-14 rounded-2xl bg-neon/10 border border-neon/30 flex items-center justify-center mx-auto mb-4">
+              <i data-lucide="credit-card" class="w-7 h-7 text-neon"></i>
+            </div>
+            <h1 class="font-display font-800 text-3xl mb-2">Activate Your Portal</h1>
+            <p class="text-gray-500">One-time payment. No subscriptions. Ever.</p>
+          </div>
+          <div class="card">
+            <div class="flex items-center justify-between mb-6 pb-4 border-b border-white/5">
+              <div>
+                <div class="font-display font-700 text-lg">Gym-to-Web Sync Portal</div>
+                <div class="text-sm text-gray-500">Full client portal + workout hosting</div>
+              </div>
+              <div class="font-display font-900 text-3xl text-neon">$497</div>
+            </div>
+            <div class="mb-6 space-y-2">
+              ${['Branded client portal','Workout plan builder','Check-in forms','Mobile-first design','Lifetime ownership'].map(t =>
+                `<div class="flex items-center gap-2 text-sm text-gray-300"><i data-lucide="check" class="w-4 h-4 text-neon"></i>${t}</div>`).join('')}
+            </div>
+            <div id="stripe-card-element" class="bg-dark-600 rounded-lg p-4 mb-4" style="min-height:44px"></div>
+            <div id="card-errors" class="text-red-400 text-sm mb-3 hidden"></div>
+            <button id="pay-btn" class="btn-neon w-full">Pay $497 CAD</button>
+            <p class="text-center text-[11px] text-gray-600 mt-3">Secure payment via Stripe. Your card is never stored on our servers.</p>
+          </div>
+        </div>
+      </div>`;
+
+      setTimeout(async () => {
+        const stripe = Stripe(CONFIG.STRIPE_PK);
+        const elements = stripe.elements({
+          appearance: {
+            theme: 'night',
+            variables: { colorPrimary: '#DFFF00', colorBackground: '#242429', colorText: '#E5E5E5', borderRadius: '8px' }
+          }
+        });
+        const cardElement = elements.create('card');
+        cardElement.mount('#stripe-card-element');
+
+        cardElement.on('change', (event) => {
+          const errEl = document.getElementById('card-errors');
+          if (event.error) {
+            errEl.textContent = event.error.message;
+            errEl.classList.remove('hidden');
+          } else {
+            errEl.classList.add('hidden');
+          }
+        });
+
+        document.getElementById('pay-btn').onclick = async () => {
+          const btn = document.getElementById('pay-btn');
+          btn.innerHTML = '<span class="spinner"></span> Processing...';
+          btn.disabled = true;
+
+          try {
+            // Create payment intent via Netlify Function
+            const { data: { session } } = await supabase.auth.getSession();
+            const res = await fetch('/.netlify/functions/create-checkout', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
+              body: JSON.stringify({ userId: currentUser.id, email: currentUser.email }),
+            });
+
+            if (!res.ok) throw new Error('Could not create payment');
+            const { clientSecret } = await res.json();
+
+            const { error, paymentIntent } = await stripe.confirmCardPayment(clientSecret, {
+              payment_method: { card: cardElement }
+            });
+
+            if (error) {
+              document.getElementById('card-errors').textContent = error.message;
+              document.getElementById('card-errors').classList.remove('hidden');
+              btn.textContent = 'Pay $497 CAD';
+              btn.disabled = false;
+            } else if (paymentIntent.status === 'succeeded') {
+              // Update profile (webhook will also do this, but let's be instant)
+              await supabase.from('profiles').update({ has_paid: true }).eq('id', currentUser.id);
+              showToast('Payment successful! Welcome aboard!');
+              triggerConfetti(btn);
+              setTimeout(() => navigate('/dashboard'), 1500);
+            }
+          } catch (err) {
+            document.getElementById('card-errors').textContent = err.message;
+            document.getElementById('card-errors').classList.remove('hidden');
+            btn.textContent = 'Pay $497 CAD';
+            btn.disabled = false;
+          }
+        };
+      }, 100);
+    });
+
+    // =============================================
+    // ROUTE: TRAINER DASHBOARD (#/dashboard)
+    // =============================================
+    route('/dashboard', async (app) => {
+      if (!requirePaid(app)) return;
+
+      app.innerHTML = `
+      ${navBar(true)}
+      <div class="pt-20 pb-12">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div class="flex flex-col lg:flex-row gap-6 mt-4">
+            <!-- Sidebar -->
+            <div class="lg:w-56 flex-shrink-0">
+              <div class="lg:sticky lg:top-24 space-y-1">
+                <a href="#/dashboard" class="sidebar-link active"><i data-lucide="layout-dashboard" class="w-4 h-4"></i> Overview</a>
+                <a href="#/dashboard/clients" class="sidebar-link"><i data-lucide="users" class="w-4 h-4"></i> Clients</a>
+                <a href="#/dashboard/plans" class="sidebar-link"><i data-lucide="dumbbell" class="w-4 h-4"></i> Plans</a>
+              </div>
+            </div>
+            <!-- Main -->
+            <div class="flex-1 min-w-0">
+              <h1 class="font-display font-800 text-2xl sm:text-3xl mb-6">Dashboard</h1>
+              <div class="grid sm:grid-cols-3 gap-4 mb-8" id="dash-stats">
+                <div class="card text-center"><div class="text-gray-500 text-xs mb-1">Clients</div><div class="font-display font-800 text-3xl text-white" id="stat-clients">-</div></div>
+                <div class="card text-center"><div class="text-gray-500 text-xs mb-1">Plans</div><div class="font-display font-800 text-3xl text-white" id="stat-plans">-</div></div>
+                <div class="card text-center"><div class="text-gray-500 text-xs mb-1">Check-Ins (7d)</div><div class="font-display font-800 text-3xl text-white" id="stat-recent-checkins">-</div></div>
+              </div>
+              <!-- Invite Link -->
+              <div class="card mb-6">
+                <div class="flex items-center gap-2 mb-3">
+                  <i data-lucide="link" class="w-5 h-5 text-electric"></i>
+                  <span class="font-display font-700">Client Invite Link</span>
+                </div>
+                <div class="flex items-center gap-2">
+                  <input type="text" id="invite-link" class="input flex-1 text-sm" readonly />
+                  <button id="copy-invite" class="btn-neon px-4 py-3 text-sm">Copy</button>
+                </div>
+                <p class="text-[11px] text-gray-600 mt-2">Share this link with clients so they can sign up and be linked to your account.</p>
+              </div>
+              <!-- Recent Check-ins -->
+              <div class="card">
+                <h2 class="font-display font-700 text-lg mb-4">Recent Check-Ins</h2>
+                <div id="recent-checkins-list" class="space-y-3">
+                  <div class="text-center text-gray-600 text-sm py-6">Loading...</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>`;
+
+      // Load data
+      setTimeout(async () => {
+        // Get clients
+        const { data: clients } = await supabase.from('profiles').select('*').eq('trainer_id', currentUser.id);
+        document.getElementById('stat-clients').textContent = clients?.length || 0;
+
+        // Get plans
+        const { data: plans } = await supabase.from('workout_plans').select('*').eq('trainer_id', currentUser.id);
+        document.getElementById('stat-plans').textContent = plans?.length || 0;
+
+        // Set invite link
+        const inviteUrl = `${window.location.origin}/#/signup/client/${currentProfile.invite_code}`;
+        document.getElementById('invite-link').value = inviteUrl;
+        document.getElementById('copy-invite').onclick = () => {
+          navigator.clipboard.writeText(inviteUrl);
+          showToast('Invite link copied!');
+        };
+
+        // Recent check-ins from all clients
+        const clientIds = (clients || []).map(c => c.id);
+        let recentCheckins = [];
+        if (clientIds.length > 0) {
+          const weekAgo = new Date(Date.now() - 7*24*60*60*1000).toISOString();
+          const { data: checkins } = await supabase.from('checkins').select('*')
+            .in('client_id', clientIds).gte('submitted_at', weekAgo).order('submitted_at', { ascending: false }).limit(10);
+          recentCheckins = checkins || [];
+          document.getElementById('stat-recent-checkins').textContent = recentCheckins.length;
+        } else {
+          document.getElementById('stat-recent-checkins').textContent = 0;
+        }
+
+        const list = document.getElementById('recent-checkins-list');
+        if (recentCheckins.length === 0) {
+          list.innerHTML = '<div class="text-center text-gray-600 text-sm py-6">No check-ins yet. Invite clients to get started!</div>';
+        } else {
+          const clientMap = {};
+          (clients || []).forEach(c => clientMap[c.id] = c.full_name || c.email);
+          list.innerHTML = recentCheckins.map(c => `
+            <div class="flex items-center justify-between py-3 border-b border-white/5 last:border-0">
+              <div>
+                <div class="text-sm text-white font-medium">${clientMap[c.client_id] || 'Unknown'}</div>
+                <div class="text-xs text-gray-500">${c.energy || '-'} energy &bull; ${c.sleep || '-'}h sleep${c.bodyweight ? ' &bull; ' + c.bodyweight + ' lbs' : ''}</div>
+              </div>
+              <div class="text-xs text-gray-600">${timeAgo(c.submitted_at)}</div>
+            </div>`).join('');
+        }
+      }, 0);
+    });
+
+    // =============================================
+    // ROUTE: TRAINER CLIENTS (#/dashboard/clients)
+    // =============================================
+    route('/dashboard/clients', async (app) => {
+      if (!requirePaid(app)) return;
+
+      app.innerHTML = `
+      ${navBar(true)}
+      <div class="pt-20 pb-12">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div class="flex flex-col lg:flex-row gap-6 mt-4">
+            <div class="lg:w-56 flex-shrink-0">
+              <div class="lg:sticky lg:top-24 space-y-1">
+                <a href="#/dashboard" class="sidebar-link"><i data-lucide="layout-dashboard" class="w-4 h-4"></i> Overview</a>
+                <a href="#/dashboard/clients" class="sidebar-link active"><i data-lucide="users" class="w-4 h-4"></i> Clients</a>
+                <a href="#/dashboard/plans" class="sidebar-link"><i data-lucide="dumbbell" class="w-4 h-4"></i> Plans</a>
+              </div>
+            </div>
+            <div class="flex-1 min-w-0">
+              <div class="flex items-center justify-between mb-6">
+                <h1 class="font-display font-800 text-2xl sm:text-3xl">Clients</h1>
+              </div>
+              <div id="clients-list" class="space-y-3">
+                <div class="text-center text-gray-600 text-sm py-6">Loading...</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>`;
+
+      setTimeout(async () => {
+        const { data: clients } = await supabase.from('profiles').select('*').eq('trainer_id', currentUser.id).order('created_at', { ascending: false });
+        const list = document.getElementById('clients-list');
+
+        if (!clients || clients.length === 0) {
+          list.innerHTML = `
+            <div class="card text-center py-12">
+              <i data-lucide="users" class="w-12 h-12 text-gray-700 mx-auto mb-4"></i>
+              <p class="text-gray-500 mb-4">No clients yet. Share your invite link!</p>
+              <div class="flex items-center gap-2 max-w-md mx-auto">
+                <input type="text" class="input flex-1 text-sm" value="${window.location.origin}/#/signup/client/${currentProfile.invite_code}" readonly id="invite-link-cl" />
+                <button class="btn-neon px-4 py-3 text-sm" onclick="navigator.clipboard.writeText(document.getElementById('invite-link-cl').value);window.GTW.toast('Copied!')">Copy</button>
+              </div>
+            </div>`;
+          lucide.createIcons();
+          return;
+        }
+
+        // Get check-in counts and assigned plans for each client
+        const clientIds = clients.map(c => c.id);
+        const { data: checkins } = await supabase.from('checkins').select('client_id').in('client_id', clientIds);
+        const { data: assignments } = await supabase.from('client_workouts').select('client_id, plan_id').in('client_id', clientIds);
+
+        const checkinCounts = {};
+        (checkins || []).forEach(c => { checkinCounts[c.client_id] = (checkinCounts[c.client_id] || 0) + 1; });
+        const planCounts = {};
+        (assignments || []).forEach(a => { planCounts[a.client_id] = (planCounts[a.client_id] || 0) + 1; });
+
+        list.innerHTML = clients.map(c => `
+          <div class="card card-hover flex items-center justify-between" data-client-id="${c.id}">
+            <div class="flex items-center gap-3">
+              <div class="w-10 h-10 rounded-xl bg-neon/10 flex items-center justify-center">
+                <i data-lucide="user" class="w-5 h-5 text-neon"></i>
+              </div>
+              <div>
+                <div class="font-display font-700 text-white">${c.full_name || 'Unnamed'}</div>
+                <div class="text-xs text-gray-500">${c.email} &bull; Joined ${formatDate(c.created_at)}</div>
+              </div>
+            </div>
+            <div class="flex items-center gap-4 text-xs text-gray-500">
+              <span>${planCounts[c.id] || 0} plans</span>
+              <span>${checkinCounts[c.id] || 0} check-ins</span>
+            </div>
+          </div>`).join('');
+        lucide.createIcons();
+      }, 0);
+    });
+
+    // =============================================
+    // ROUTE: TRAINER PLANS (#/dashboard/plans)
+    // =============================================
+    route('/dashboard/plans', async (app) => {
+      if (!requirePaid(app)) return;
+
+      app.innerHTML = `
+      ${navBar(true)}
+      <div class="pt-20 pb-12">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div class="flex flex-col lg:flex-row gap-6 mt-4">
+            <div class="lg:w-56 flex-shrink-0">
+              <div class="lg:sticky lg:top-24 space-y-1">
+                <a href="#/dashboard" class="sidebar-link"><i data-lucide="layout-dashboard" class="w-4 h-4"></i> Overview</a>
+                <a href="#/dashboard/clients" class="sidebar-link"><i data-lucide="users" class="w-4 h-4"></i> Clients</a>
+                <a href="#/dashboard/plans" class="sidebar-link active"><i data-lucide="dumbbell" class="w-4 h-4"></i> Plans</a>
+              </div>
+            </div>
+            <div class="flex-1 min-w-0">
+              <div class="flex items-center justify-between mb-6">
+                <h1 class="font-display font-800 text-2xl sm:text-3xl">Workout Plans</h1>
+                <button id="new-plan-btn" class="btn-neon text-sm px-4 py-2.5 flex items-center gap-2">
+                  <i data-lucide="plus" class="w-4 h-4"></i> New Plan
+                </button>
+              </div>
+              <div id="plans-list" class="space-y-3">
+                <div class="text-center text-gray-600 text-sm py-6">Loading...</div>
+              </div>
+              <!-- Plan Editor (hidden by default) -->
+              <div id="plan-editor" class="hidden mt-6">
+                <div class="card">
+                  <h2 class="font-display font-700 text-lg mb-4" id="editor-title">New Workout Plan</h2>
+                  <form id="plan-form" class="space-y-4">
+                    <div>
+                      <label class="text-xs text-gray-400 font-medium block mb-1.5">Plan Title</label>
+                      <input type="text" id="plan-title" class="input" placeholder="e.g. Push Day A" required />
+                    </div>
+                    <div>
+                      <label class="text-xs text-gray-400 font-medium block mb-1.5">Day of Week (optional)</label>
+                      <select id="plan-dow" class="input">
+                        <option value="">Any day</option>
+                        <option value="1">Monday</option><option value="2">Tuesday</option>
+                        <option value="3">Wednesday</option><option value="4">Thursday</option>
+                        <option value="5">Friday</option><option value="6">Saturday</option>
+                        <option value="0">Sunday</option>
+                      </select>
+                    </div>
+                    <div>
+                      <div class="flex items-center justify-between mb-2">
+                        <label class="text-xs text-gray-400 font-medium">Exercises</label>
+                        <button type="button" id="add-exercise-btn" class="text-xs text-neon hover:underline flex items-center gap-1">
+                          <i data-lucide="plus" class="w-3 h-3"></i> Add Exercise
+                        </button>
+                      </div>
+                      <div id="exercises-builder" class="space-y-2"></div>
+                    </div>
+                    <!-- Assign to clients -->
+                    <div>
+                      <label class="text-xs text-gray-400 font-medium block mb-1.5">Assign to Clients</label>
+                      <div id="assign-clients" class="space-y-2"></div>
+                    </div>
+                    <div class="flex gap-3">
+                      <button type="submit" id="save-plan-btn" class="btn-neon flex-1">Save Plan</button>
+                      <button type="button" id="cancel-plan-btn" class="btn-outline">Cancel</button>
+                    </div>
+                  </form>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>`;
+
+      let editingPlanId = null;
+      let exercises = [];
+      let clients = [];
+
+      async function loadPlans() {
+        const { data: plans } = await supabase.from('workout_plans').select('*').eq('trainer_id', currentUser.id).order('created_at', { ascending: false });
+        const { data: cl } = await supabase.from('profiles').select('id, full_name, email').eq('trainer_id', currentUser.id);
+        clients = cl || [];
+
+        const list = document.getElementById('plans-list');
+        if (!plans || plans.length === 0) {
+          list.innerHTML = '<div class="card text-center py-12"><p class="text-gray-500">No plans yet. Create your first workout plan!</p></div>';
+          return;
+        }
+
+        // Get assignments
+        const planIds = plans.map(p => p.id);
+        const { data: assignments } = await supabase.from('client_workouts').select('plan_id, client_id').in('plan_id', planIds);
+        const assignMap = {};
+        (assignments || []).forEach(a => {
+          if (!assignMap[a.plan_id]) assignMap[a.plan_id] = [];
+          assignMap[a.plan_id].push(a.client_id);
+        });
+
+        const clientMap = {};
+        clients.forEach(c => clientMap[c.id] = c.full_name || c.email);
+
+        list.innerHTML = plans.map(p => {
+          const exCount = (p.exercises || []).length;
+          const assigned = assignMap[p.id] || [];
+          const dayLabel = p.day_of_week !== null ? DAYS[p.day_of_week] : 'Any day';
+          return `
+            <div class="card card-hover">
+              <div class="flex items-center justify-between mb-2">
+                <div class="font-display font-700 text-white">${p.title}</div>
+                <div class="flex items-center gap-2">
+                  <button class="text-gray-500 hover:text-neon transition-colors edit-plan-btn" data-id="${p.id}"><i data-lucide="pencil" class="w-4 h-4"></i></button>
+                  <button class="text-gray-500 hover:text-red-400 transition-colors delete-plan-btn" data-id="${p.id}"><i data-lucide="trash-2" class="w-4 h-4"></i></button>
+                </div>
+              </div>
+              <div class="text-xs text-gray-500">${exCount} exercises &bull; ${dayLabel} &bull; ${assigned.length} client(s) assigned</div>
+              ${assigned.length > 0 ? `<div class="flex flex-wrap gap-1 mt-2">${assigned.map(cid => `<span class="text-[10px] bg-neon/10 text-neon px-2 py-0.5 rounded">${clientMap[cid] || 'Unknown'}</span>`).join('')}</div>` : ''}
+            </div>`;
+        }).join('');
+        lucide.createIcons();
+
+        // Edit buttons
+        $$('.edit-plan-btn').forEach(btn => {
+          btn.onclick = () => {
+            const plan = plans.find(p => p.id === btn.dataset.id);
+            if (plan) openEditor(plan, assignMap[plan.id] || []);
+          };
+        });
+
+        // Delete buttons
+        $$('.delete-plan-btn').forEach(btn => {
+          btn.onclick = async () => {
+            if (!confirm('Delete this plan?')) return;
+            await supabase.from('client_workouts').delete().eq('plan_id', btn.dataset.id);
+            await supabase.from('workout_plans').delete().eq('id', btn.dataset.id);
+            showToast('Plan deleted');
+            loadPlans();
+          };
+        });
+      }
+
+      function renderExerciseRow(ex, idx) {
+        return `
+          <div class="flex items-center gap-2 bg-dark-600 rounded-lg p-2" data-ex-idx="${idx}">
+            <span class="text-neon font-display font-700 text-xs w-6 text-center">${String(idx+1).padStart(2,'0')}</span>
+            <input type="text" class="input flex-1 py-1.5 text-sm ex-name" placeholder="Exercise name" value="${ex.name || ''}" />
+            <input type="text" class="input w-14 py-1.5 text-sm text-center ex-sets" placeholder="Sets" value="${ex.sets || ''}" />
+            <input type="text" class="input w-16 py-1.5 text-sm text-center ex-reps" placeholder="Reps" value="${ex.reps || ''}" />
+            <input type="text" class="input w-24 py-1.5 text-sm ex-note" placeholder="Note" value="${ex.note || ''}" />
+            <button type="button" class="text-gray-600 hover:text-red-400 remove-ex" data-idx="${idx}"><i data-lucide="x" class="w-4 h-4"></i></button>
+          </div>`;
+      }
+
+      function renderExercisesBuilder() {
+        const builder = document.getElementById('exercises-builder');
+        builder.innerHTML = exercises.map((ex, i) => renderExerciseRow(ex, i)).join('');
+        if (exercises.length === 0) {
+          builder.innerHTML = '<div class="text-center text-gray-600 text-sm py-4">No exercises. Click "Add Exercise" above.</div>';
+        }
+        lucide.createIcons();
+
+        $$('.remove-ex', builder).forEach(btn => {
+          btn.onclick = () => { exercises.splice(parseInt(btn.dataset.idx), 1); renderExercisesBuilder(); };
+        });
+      }
+
+      function renderAssignClients(selectedIds = []) {
+        const container = document.getElementById('assign-clients');
+        if (clients.length === 0) {
+          container.innerHTML = '<div class="text-sm text-gray-600">No clients yet. Invite clients first.</div>';
+          return;
+        }
+        container.innerHTML = clients.map(c => `
+          <label class="flex items-center gap-3 cursor-pointer">
+            <input type="checkbox" class="assign-cb accent-[#DFFF00]" value="${c.id}" ${selectedIds.includes(c.id) ? 'checked' : ''} />
+            <span class="text-sm text-gray-300">${c.full_name || c.email}</span>
+          </label>`).join('');
+      }
+
+      function openEditor(plan = null, assignedIds = []) {
+        editingPlanId = plan?.id || null;
+        exercises = plan ? [...(plan.exercises || [])] : [{ name: '', sets: '', reps: '', note: '' }];
+        document.getElementById('plan-editor').classList.remove('hidden');
+        document.getElementById('editor-title').textContent = plan ? 'Edit Plan' : 'New Workout Plan';
+        document.getElementById('plan-title').value = plan?.title || '';
+        document.getElementById('plan-dow').value = plan?.day_of_week ?? '';
+        renderExercisesBuilder();
+        renderAssignClients(assignedIds);
+        document.getElementById('plan-editor').scrollIntoView({ behavior: 'smooth' });
+      }
+
+      function closeEditor() {
+        document.getElementById('plan-editor').classList.add('hidden');
+        editingPlanId = null;
+        exercises = [];
+      }
+
+      function collectExercises() {
+        const builder = document.getElementById('exercises-builder');
+        return $$('[data-ex-idx]', builder).map(row => ({
+          name: $('.ex-name', row).value.trim(),
+          sets: $('.ex-sets', row).value.trim(),
+          reps: $('.ex-reps', row).value.trim(),
+          note: $('.ex-note', row).value.trim(),
+        })).filter(e => e.name);
+      }
+
+      setTimeout(async () => {
+        await loadPlans();
+
+        document.getElementById('new-plan-btn').onclick = () => openEditor();
+        document.getElementById('cancel-plan-btn').onclick = closeEditor;
+        document.getElementById('add-exercise-btn').onclick = () => {
+          // Collect current values first
+          exercises = collectExercises();
+          exercises.push({ name: '', sets: '', reps: '', note: '' });
+          renderExercisesBuilder();
+        };
+
+        document.getElementById('plan-form').onsubmit = async (e) => {
+          e.preventDefault();
+          const btn = document.getElementById('save-plan-btn');
+          btn.innerHTML = '<span class="spinner"></span>';
+          btn.disabled = true;
+
+          const finalExercises = collectExercises();
+          const title = document.getElementById('plan-title').value.trim();
+          const dow = document.getElementById('plan-dow').value;
+
+          const planData = {
+            trainer_id: currentUser.id,
+            title,
+            day_of_week: dow ? parseInt(dow) : null,
+            exercises: finalExercises,
+            updated_at: new Date().toISOString(),
+          };
+
+          let planId = editingPlanId;
+          if (editingPlanId) {
+            await supabase.from('workout_plans').update(planData).eq('id', editingPlanId);
+          } else {
+            const { data } = await supabase.from('workout_plans').insert(planData).select().single();
+            planId = data.id;
+          }
+
+          // Handle assignments
+          const selectedClients = $$('.assign-cb:checked').map(cb => cb.value);
+          // Remove old assignments
+          await supabase.from('client_workouts').delete().eq('plan_id', planId);
+          // Insert new
+          if (selectedClients.length > 0) {
+            await supabase.from('client_workouts').insert(
+              selectedClients.map(cid => ({ client_id: cid, plan_id: planId }))
+            );
+          }
+
+          showToast(editingPlanId ? 'Plan updated!' : 'Plan created!');
+          closeEditor();
+          btn.textContent = 'Save Plan';
+          btn.disabled = false;
+          await loadPlans();
+        };
+      }, 0);
+    });
+
+    // =============================================
+    // ROUTE: CLIENT PORTAL (#/portal)
+    // =============================================
+    route('/portal', async (app) => {
+      if (!requireClient(app)) return;
+
+      app.innerHTML = `
+      ${navBar(true)}
+      <div class="pt-20 pb-12">
+        <div class="max-w-2xl mx-auto px-4 sm:px-6">
+          <!-- Greeting -->
+          <div class="flex items-center justify-between mb-6 mt-4">
+            <div>
+              <h1 class="font-display font-800 text-2xl">Hey, ${currentProfile?.full_name?.split(' ')[0] || 'there'}!</h1>
+              <p class="text-sm text-gray-500" id="portal-date"></p>
+            </div>
+          </div>
+
+          <!-- Tabs -->
+          <div class="flex gap-0 mb-6 border-b border-white/5">
+            <button class="portal-tab tab-active flex-1 text-center text-sm font-display font-600 py-3 border-b-2 transition-colors" data-tab="workouts">Workouts</button>
+            <button class="portal-tab tab-inactive flex-1 text-center text-sm font-display font-600 py-3 border-b-2 transition-colors" data-tab="checkin">Check-In</button>
+            <button class="portal-tab tab-inactive flex-1 text-center text-sm font-display font-600 py-3 border-b-2 transition-colors" data-tab="progress">Progress</button>
+          </div>
+
+          <!-- Workouts -->
+          <div id="tab-workouts" class="portal-content space-y-4">
+            <div id="workout-plans-list" class="space-y-4">
+              <div class="text-center text-gray-600 text-sm py-6"><span class="spinner"></span></div>
+            </div>
+          </div>
+
+          <!-- Check-In -->
+          <div id="tab-checkin" class="portal-content hidden space-y-4">
+            <div id="past-checkins-portal"></div>
+            <div class="card">
+              <div class="flex items-center gap-2 mb-4">
+                <i data-lucide="clipboard-check" class="w-5 h-5 text-electric"></i>
+                <span class="font-display font-700">Weekly Check-In</span>
+              </div>
+              <form id="portal-checkin-form" class="space-y-4">
+                <div>
+                  <label class="text-xs text-gray-400 font-medium block mb-2">Energy level</label>
+                  <div class="flex gap-2">
+                    ${['low','ok','great','peak'].map(v => `<button type="button" class="flex-1 py-2 rounded-lg bg-dark-600 text-xs text-gray-400 hover:bg-dark-500 transition-colors p-energy-btn" data-val="${v}">${v.charAt(0).toUpperCase()+v.slice(1)}</button>`).join('')}
+                  </div>
+                </div>
+                <div>
+                  <label class="text-xs text-gray-400 font-medium block mb-2">Sleep (hours)</label>
+                  <div class="flex items-center gap-3 bg-dark-600 rounded-lg px-3 py-2.5">
+                    <i data-lucide="moon" class="w-4 h-4 text-electric"></i>
+                    <input type="range" min="4" max="10" step="0.5" value="7" class="flex-1 accent-[#00D4FF]" id="p-sleep" />
+                    <span class="text-sm text-white font-display font-700 w-8 text-right" id="p-sleep-val">7h</span>
+                  </div>
+                </div>
+                <div>
+                  <label class="text-xs text-gray-400 font-medium block mb-2">Soreness / pain?</label>
+                  <textarea rows="2" id="p-soreness" class="input text-sm resize-none" placeholder="Any aches or tightness?"></textarea>
+                </div>
+                <div>
+                  <label class="text-xs text-gray-400 font-medium block mb-2">Bodyweight (lbs)</label>
+                  <input type="number" id="p-bodyweight" class="input text-sm" placeholder="e.g. 158" />
+                </div>
+                <div>
+                  <label class="text-xs text-gray-400 font-medium block mb-2">Goal this week</label>
+                  <textarea rows="2" id="p-goal" class="input text-sm resize-none" placeholder="What are you focused on?"></textarea>
+                </div>
+                <button type="submit" id="p-checkin-btn" class="btn-neon w-full" style="background:#00D4FF">Submit Check-In</button>
+              </form>
+            </div>
+          </div>
+
+          <!-- Progress -->
+          <div id="tab-progress" class="portal-content hidden space-y-4">
+            <div class="grid grid-cols-2 gap-3">
+              <div class="card text-center"><div class="text-xs text-gray-500 mb-1">Workouts Logged</div><div class="font-display font-800 text-2xl text-white" id="p-stat-workouts">0</div></div>
+              <div class="card text-center"><div class="text-xs text-gray-500 mb-1">Check-Ins</div><div class="font-display font-800 text-2xl text-white" id="p-stat-checkins">0</div></div>
+            </div>
+            <div class="card">
+              <div class="text-xs font-display font-600 text-gray-400 mb-3">BODYWEIGHT TREND</div>
+              <div class="flex items-end gap-2 h-28" id="p-weight-chart"><div class="text-center text-gray-600 text-xs w-full py-8">Submit check-ins with weight to see trend</div></div>
+            </div>
+            <div class="card">
+              <div class="text-xs font-display font-600 text-gray-400 mb-3">RECENT ACTIVITY</div>
+              <div id="p-activity" class="space-y-2"><div class="text-center text-gray-600 text-xs py-4">No activity yet</div></div>
+            </div>
+          </div>
+        </div>
+      </div>`;
+
+      const now = new Date();
+      document.getElementById('portal-date').textContent = `${DAYS[now.getDay()]}, ${MONTHS[now.getMonth()]} ${now.getDate()} ${YEAR}`;
+
+      setTimeout(async () => {
+        // Tab switching
+        let selectedEnergy = '';
+
+        $$('.portal-tab').forEach(tab => {
+          tab.onclick = () => {
+            $$('.portal-tab').forEach(t => { t.classList.remove('tab-active'); t.classList.add('tab-inactive'); });
+            tab.classList.remove('tab-inactive'); tab.classList.add('tab-active');
+            $$('.portal-content').forEach(c => c.classList.add('hidden'));
+            document.getElementById('tab-' + tab.dataset.tab).classList.remove('hidden');
+            if (tab.dataset.tab === 'progress') loadProgress();
+            if (tab.dataset.tab === 'checkin') loadPastCheckins();
+          };
+        });
+
+        // Energy buttons
+        $$('.p-energy-btn').forEach(btn => {
+          btn.onclick = () => {
+            $$('.p-energy-btn').forEach(b => { b.className = 'flex-1 py-2 rounded-lg bg-dark-600 text-xs text-gray-400 hover:bg-dark-500 transition-colors p-energy-btn'; });
+            btn.className = 'flex-1 py-2 rounded-lg bg-neon/20 text-xs text-neon border border-neon/30 p-energy-btn';
+            selectedEnergy = btn.dataset.val;
+          };
+        });
+
+        // Sleep slider
+        document.getElementById('p-sleep').oninput = function() {
+          document.getElementById('p-sleep-val').textContent = this.value + 'h';
+        };
+
+        // Load workout plans
+        const { data: assignments } = await supabase.from('client_workouts').select('plan_id, workout_plans(*)').eq('client_id', currentUser.id);
+        const plansList = document.getElementById('workout-plans-list');
+
+        if (!assignments || assignments.length === 0) {
+          plansList.innerHTML = '<div class="card text-center py-8"><p class="text-gray-500">No workout plans assigned yet. Your trainer will add them soon!</p></div>';
+        } else {
+          plansList.innerHTML = assignments.map(a => {
+            const plan = a.workout_plans;
+            if (!plan) return '';
+            const exs = plan.exercises || [];
+            const dayLabel = plan.day_of_week !== null ? DAYS[plan.day_of_week] : 'Any day';
+            return `
+              <div class="card">
+                <div class="flex items-center justify-between mb-3">
+                  <div>
+                    <div class="text-xs text-neon font-display font-600">${dayLabel.toUpperCase()}</div>
+                    <div class="font-display font-700 text-white">${plan.title}</div>
+                  </div>
+                  <a href="#/portal/workout/${plan.id}" class="btn-neon text-xs px-4 py-2">Start</a>
+                </div>
+                <div class="space-y-1.5">
+                  ${exs.slice(0, 4).map((ex, i) => `
+                    <div class="flex items-center gap-3 bg-dark-600/50 rounded-lg p-2">
+                      <span class="text-neon font-display font-700 text-[10px] w-5">${String(i+1).padStart(2,'0')}</span>
+                      <span class="text-xs text-white flex-1">${ex.name}</span>
+                      <span class="text-[10px] text-gray-500">${ex.sets} &times; ${ex.reps}</span>
+                    </div>`).join('')}
+                  ${exs.length > 4 ? `<div class="text-center text-[10px] text-gray-600">+${exs.length - 4} more exercises</div>` : ''}
+                </div>
+              </div>`;
+          }).join('');
+        }
+
+        // Check-in form
+        document.getElementById('portal-checkin-form').onsubmit = async (e) => {
+          e.preventDefault();
+          const btn = document.getElementById('p-checkin-btn');
+          btn.innerHTML = '<span class="spinner"></span>';
+          btn.disabled = true;
+
+          const { error } = await supabase.from('checkins').insert({
+            client_id: currentUser.id,
+            energy: selectedEnergy || null,
+            sleep: parseFloat(document.getElementById('p-sleep').value),
+            soreness: document.getElementById('p-soreness').value,
+            bodyweight: document.getElementById('p-bodyweight').value ? parseFloat(document.getElementById('p-bodyweight').value) : null,
+            goal: document.getElementById('p-goal').value,
+          });
+
+          if (error) {
+            showToast('Failed to submit: ' + error.message, true);
+          } else {
+            showToast('Check-in submitted!');
+            document.getElementById('portal-checkin-form').reset();
+            document.getElementById('p-sleep-val').textContent = '7h';
+            $$('.p-energy-btn').forEach(b => { b.className = 'flex-1 py-2 rounded-lg bg-dark-600 text-xs text-gray-400 hover:bg-dark-500 transition-colors p-energy-btn'; });
+            selectedEnergy = '';
+            loadPastCheckins();
+          }
+          btn.textContent = 'Submit Check-In';
+          btn.style.background = '#00D4FF';
+          btn.disabled = false;
+        };
+
+        async function loadPastCheckins() {
+          const { data: checkins } = await supabase.from('checkins').select('*').eq('client_id', currentUser.id).order('submitted_at', { ascending: false }).limit(5);
+          const container = document.getElementById('past-checkins-portal');
+          if (!checkins || checkins.length === 0) { container.innerHTML = ''; return; }
+          container.innerHTML = `
+            <div class="card mb-3">
+              <div class="text-xs font-display font-600 text-gray-400 mb-3">PAST CHECK-INS</div>
+              ${checkins.map(c => `
+                <div class="flex items-center justify-between py-2 border-b border-white/5 last:border-0">
+                  <div>
+                    <div class="text-xs text-white">${formatDate(c.submitted_at)}</div>
+                    <div class="text-[10px] text-gray-500">${c.energy || '-'} energy &bull; ${c.sleep || '-'}h sleep${c.bodyweight ? ' &bull; ' + c.bodyweight + ' lbs' : ''}</div>
+                  </div>
+                  <div class="w-5 h-5 rounded bg-electric/10 flex items-center justify-center">
+                    <i data-lucide="check" class="w-3 h-3 text-electric"></i>
+                  </div>
+                </div>`).join('')}
+            </div>`;
+          lucide.createIcons();
+        }
+
+        async function loadProgress() {
+          const { data: checkins } = await supabase.from('checkins').select('*').eq('client_id', currentUser.id).order('submitted_at', { ascending: true });
+          const { data: logs } = await supabase.from('workout_logs').select('*').eq('client_id', currentUser.id);
+
+          document.getElementById('p-stat-checkins').textContent = checkins?.length || 0;
+
+          // Count distinct workout sessions (by day)
+          const sessionDays = new Set();
+          (logs || []).filter(l => l.completed).forEach(l => sessionDays.add(new Date(l.logged_at).toDateString()));
+          document.getElementById('p-stat-workouts').textContent = sessionDays.size;
+
+          // Weight chart
+          const weightData = (checkins || []).filter(c => c.bodyweight).slice(-8);
+          const chart = document.getElementById('p-weight-chart');
+          if (weightData.length >= 2) {
+            const weights = weightData.map(c => c.bodyweight);
+            const max = Math.max(...weights), min = Math.min(...weights);
+            const range = max - min || 1;
+            chart.innerHTML = weightData.map((c, i) => {
+              const pct = Math.max(20, ((c.bodyweight - min) / range) * 80 + 20);
+              const isLast = i === weightData.length - 1;
+              return `<div class="flex-1 flex flex-col items-center gap-1">
+                <div class="text-[8px] ${isLast ? 'text-neon font-bold' : 'text-gray-500'}">${c.bodyweight}</div>
+                <div class="w-full rounded-t ${isLast ? 'bg-neon' : 'bg-neon/30'}" style="height:${pct}%"></div>
+                <span class="text-[9px] ${isLast ? 'text-neon' : 'text-gray-600'}">${MONTHS[new Date(c.submitted_at).getMonth()].slice(0,3)}</span>
+              </div>`;
+            }).join('');
+          } else {
+            chart.innerHTML = '<div class="text-center text-gray-600 text-xs w-full py-8">Submit check-ins with weight to see trend</div>';
+          }
+
+          // Activity
+          const actContainer = document.getElementById('p-activity');
+          const activities = [];
+          (checkins || []).slice(-3).reverse().forEach(c => {
+            activities.push({ text: `Check-in: ${c.energy || '-'} energy, ${c.sleep}h sleep`, time: c.submitted_at });
+          });
+          (logs || []).filter(l => l.completed).slice(-3).reverse().forEach(l => {
+            activities.push({ text: `Logged exercise${l.weight ? ' @ ' + l.weight + ' lbs' : ''}`, time: l.logged_at });
+          });
+          activities.sort((a, b) => new Date(b.time) - new Date(a.time));
+
+          if (activities.length === 0) {
+            actContainer.innerHTML = '<div class="text-center text-gray-600 text-xs py-4">No activity yet</div>';
+          } else {
+            actContainer.innerHTML = activities.slice(0, 5).map(a => `
+              <div class="flex items-center gap-3">
+                <div class="w-1.5 h-1.5 rounded-full bg-neon/50"></div>
+                <div class="flex-1"><div class="text-[11px] text-gray-300">${a.text}</div><div class="text-[9px] text-gray-600">${timeAgo(a.time)}</div></div>
+              </div>`).join('');
+          }
+        }
+
+        loadPastCheckins();
+        lucide.createIcons();
+      }, 0);
+    });
+
+    // =============================================
+    // ROUTE: ACTIVE WORKOUT (#/portal/workout/:planId)
+    // =============================================
+    route('/portal/workout/:planId', async (app, params) => {
+      if (!requireClient(app)) return;
+
+      // Load plan
+      const { data: plan } = await supabase.from('workout_plans').select('*').eq('id', params.planId).single();
+      if (!plan) { navigate('/portal'); return; }
+
+      const exercises = plan.exercises || [];
+      const todayKey = new Date().toISOString().split('T')[0];
+
+      // Load today's logs for this plan
+      const { data: existingLogs } = await supabase.from('workout_logs').select('*')
+        .eq('client_id', currentUser.id).eq('plan_id', plan.id)
+        .gte('logged_at', todayKey + 'T00:00:00').lte('logged_at', todayKey + 'T23:59:59');
+
+      const logMap = {};
+      (existingLogs || []).forEach(l => { logMap[l.exercise_index] = l; });
+
+      let timerStart = null;
+      let timerInterval = null;
+
+      app.innerHTML = `
+      ${navBar(true)}
+      <div class="pt-20 pb-12">
+        <div class="max-w-2xl mx-auto px-4 sm:px-6">
+          <div class="flex items-center gap-3 mb-6 mt-4">
+            <a href="#/portal" class="w-10 h-10 rounded-xl bg-dark-700 flex items-center justify-center hover:bg-dark-600 transition-colors">
+              <i data-lucide="arrow-left" class="w-5 h-5 text-gray-400"></i>
+            </a>
+            <div class="flex-1">
+              <h1 class="font-display font-800 text-xl">${plan.title}</h1>
+              <p class="text-xs text-gray-500">${exercises.length} exercises</p>
+            </div>
+            <div class="text-sm text-gray-400 bg-dark-700 px-3 py-1.5 rounded-lg font-display font-600" id="w-timer">0:00</div>
+            <div class="text-sm text-neon bg-neon/10 px-3 py-1.5 rounded-lg font-display font-700" id="w-count">0/${exercises.length}</div>
+          </div>
+
+          <div id="w-exercises" class="space-y-2 mb-6"></div>
+
+          <button id="w-start-btn" class="btn-neon w-full mb-4">${Object.keys(logMap).length > 0 ? 'Resume Workout' : 'Start Workout'}</button>
+          <a href="#/portal" class="block text-center text-sm text-gray-500 hover:text-white transition-colors">Back to Portal</a>
+        </div>
+      </div>`;
+
+      function renderWorkout() {
+        const container = document.getElementById('w-exercises');
+        let doneCount = 0;
+
+        container.innerHTML = exercises.map((ex, i) => {
+          const log = logMap[i];
+          const done = log?.completed || false;
+          if (done) doneCount++;
+
+          return `
+            <div class="flex items-center gap-3 bg-dark-700 rounded-xl p-3 transition-all ${done ? 'opacity-50' : ''}" data-idx="${i}">
+              <div class="w-9 h-9 rounded-lg ${done ? 'bg-neon/30' : 'bg-neon/10'} flex items-center justify-center flex-shrink-0">
+                ${done
+                  ? '<svg class="w-4 h-4 text-neon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"></polyline></svg>'
+                  : `<span class="text-neon font-display font-800 text-xs">${String(i+1).padStart(2,'0')}</span>`}
+              </div>
+              <div class="flex-1 min-w-0">
+                <div class="text-sm font-medium ${done ? 'text-gray-600 line-through' : 'text-white'}">${ex.name}</div>
+                <div class="text-[11px] text-gray-500">${ex.sets} sets &times; ${ex.reps}${ex.note ? ' &bull; ' + ex.note : ''}</div>
+              </div>
+              <input type="text" inputmode="decimal" class="weight-input w-ex-weight" data-idx="${i}"
+                placeholder="lbs" value="${log?.weight || ''}" ${!timerStart ? 'disabled' : ''} />
+              <button class="w-8 h-8 rounded-lg flex items-center justify-center transition-colors w-ex-done
+                ${done ? 'bg-neon/20 text-neon' : 'bg-dark-500 text-gray-600 hover:text-neon hover:bg-neon/10'}"
+                data-idx="${i}" ${!timerStart ? 'disabled' : ''}>
+                <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"></polyline></svg>
+              </button>
+            </div>`;
+        }).join('');
+
+        document.getElementById('w-count').textContent = `${doneCount}/${exercises.length}`;
+
+        // Weight inputs
+        $$('.w-ex-weight', container).forEach(input => {
+          input.onchange = async () => {
+            const idx = parseInt(input.dataset.idx);
+            await upsertLog(idx, { weight: parseFloat(input.value) || null });
+          };
+        });
+
+        // Done toggles
+        $$('.w-ex-done', container).forEach(btn => {
+          btn.onclick = async () => {
+            if (!timerStart) return;
+            const idx = parseInt(btn.dataset.idx);
+            const currentlyDone = logMap[idx]?.completed || false;
+            const weightInput = $(`.w-ex-weight[data-idx="${idx}"]`);
+            const weight = weightInput ? parseFloat(weightInput.value) || null : null;
+            await upsertLog(idx, { completed: !currentlyDone, weight });
+            renderWorkout();
+
+            // Check if all done
+            const allDone = exercises.every((_, i) => logMap[i]?.completed);
+            if (allDone) {
+              showToast('Workout complete! Great session!');
+              triggerConfetti(document.getElementById('w-count'));
+            }
+          };
+        });
+      }
+
+      async function upsertLog(exerciseIndex, updates) {
+        const existing = logMap[exerciseIndex];
+        if (existing) {
+          const { data } = await supabase.from('workout_logs').update(updates).eq('id', existing.id).select().single();
+          if (data) logMap[exerciseIndex] = data;
+        } else {
+          const { data } = await supabase.from('workout_logs').insert({
+            client_id: currentUser.id,
+            plan_id: plan.id,
+            exercise_index: exerciseIndex,
+            completed: updates.completed || false,
+            weight: updates.weight || null,
+            reps_done: null,
+          }).select().single();
+          if (data) logMap[exerciseIndex] = data;
+        }
+      }
+
+      setTimeout(() => {
+        renderWorkout();
+
+        // If there are existing logs, resume timer
+        if (Object.keys(logMap).length > 0 && !timerStart) {
+          // Estimate start from earliest log
+          const earliest = Object.values(logMap).sort((a, b) => new Date(a.logged_at) - new Date(b.logged_at))[0];
+          timerStart = new Date(earliest.logged_at).getTime();
+          function tick() {
+            const s = Math.floor((Date.now() - timerStart) / 1000);
+            document.getElementById('w-timer').textContent = `${Math.floor(s/60)}:${(s%60).toString().padStart(2,'0')}`;
+          }
+          tick();
+          timerInterval = setInterval(tick, 1000);
+          renderWorkout();
+        }
+
+        document.getElementById('w-start-btn').onclick = () => {
+          if (timerStart) return;
+          timerStart = Date.now();
+          function tick() {
+            const s = Math.floor((Date.now() - timerStart) / 1000);
+            document.getElementById('w-timer').textContent = `${Math.floor(s/60)}:${(s%60).toString().padStart(2,'0')}`;
+          }
+          tick();
+          timerInterval = setInterval(tick, 1000);
+          document.getElementById('w-start-btn').textContent = 'Workout In Progress...';
+          document.getElementById('w-start-btn').classList.add('opacity-50');
+          showToast('Let\'s go!');
+          renderWorkout();
+        };
+      }, 0);
+    });
+
+    // =============================================
+    // GLOBAL HELPERS (exposed for onclick handlers)
+    // =============================================
+    window.GTW = {
+      logout: async () => {
+        await supabase.auth.signOut();
+        currentUser = null;
+        currentProfile = null;
+        showToast('Logged out');
+        navigate('/');
+      },
+      toast: showToast,
+    };
+
+    // =============================================
+    // AUTH STATE LISTENER
+    // =============================================
+    supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'SIGNED_OUT') {
+        currentUser = null;
+        currentProfile = null;
+      }
+    });
+
+    // =============================================
+    // BOOT
+    // =============================================
+    handleRoute();
+    lucide.createIcons();
+
+  })();
+  </script>
+
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "Gym-to-Web Sync",
+    "description": "Minimalist client portal generator for independent personal trainers in Halifax, Nova Scotia.",
+    "applicationCategory": "HealthApplication",
+    "operatingSystem": "Web",
+    "offers": { "@type": "Offer", "price": "497", "priceCurrency": "CAD" },
+    "author": { "@type": "Organization", "name": "HuddyDev", "url": "https://huddydev.com" }
+  }
+  </script>
+</body>
+</html>
