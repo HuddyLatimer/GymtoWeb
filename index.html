@@ -465,6 +465,7 @@
             <a href="#/dashboard" class="sidebar-link ${active === 'overview' ? 'active' : ''}"><i data-lucide="layout-dashboard" class="w-4 h-4"></i> Overview</a>
             <a href="#/dashboard/clients" class="sidebar-link ${active === 'clients' ? 'active' : ''}"><i data-lucide="users" class="w-4 h-4"></i> Clients</a>
             <a href="#/dashboard/plans" class="sidebar-link ${active === 'plans' ? 'active' : ''}"><i data-lucide="dumbbell" class="w-4 h-4"></i> Plans</a>
+            <a href="#/dashboard/checkins" class="sidebar-link ${active === 'checkins' ? 'active' : ''}"><i data-lucide="clipboard-check" class="w-4 h-4"></i> Check-Ins</a>
           </div>
         </div>`;
     }
@@ -1611,6 +1612,129 @@
           btn.textContent = 'Save Plan';
           btn.disabled = false;
         };
+      }, 0);
+    });
+
+    // =============================================
+    // ROUTE: TRAINER CHECK-INS (#/dashboard/checkins)
+    // =============================================
+    route('/dashboard/checkins', async (app) => {
+      if (!requirePaid(app)) return;
+
+      app.innerHTML = `
+      ${navBar(true)}
+      <div class="pt-20 pb-12">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div class="flex flex-col lg:flex-row gap-6 mt-4">
+            ${dashSidebar('checkins')}
+            <div class="flex-1 min-w-0">
+              <div class="flex items-center justify-between mb-6">
+                <h1 class="font-display font-800 text-2xl sm:text-3xl">Client Check-Ins</h1>
+                <select id="checkin-filter" class="input w-auto text-sm py-2 px-3">
+                  <option value="all">All Clients</option>
+                </select>
+              </div>
+              <div id="checkins-list" class="space-y-3">
+                <div class="text-center text-gray-600 text-sm py-6"><span class="spinner"></span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>`;
+
+      setTimeout(async () => {
+        try {
+          const { data: clients } = await supabase.from('profiles').select('id, full_name, email')
+            .eq('trainer_id', currentUser.id);
+          const clientMap = {};
+          (clients || []).forEach(c => { clientMap[c.id] = c.full_name || c.email; });
+          const clientIds = (clients || []).map(c => c.id);
+
+          // Populate filter dropdown
+          const filter = document.getElementById('checkin-filter');
+          if (filter && clients?.length) {
+            clients.forEach(c => {
+              const opt = document.createElement('option');
+              opt.value = c.id;
+              opt.textContent = c.full_name || c.email;
+              filter.appendChild(opt);
+            });
+          }
+
+          let allCheckins = [];
+          if (clientIds.length > 0) {
+            const { data } = await supabase.from('checkins').select('*')
+              .in('client_id', clientIds)
+              .order('submitted_at', { ascending: false })
+              .limit(50);
+            allCheckins = data || [];
+          }
+
+          function renderCheckins(filterClientId) {
+            const list = document.getElementById('checkins-list');
+            if (!list) return;
+
+            const filtered = filterClientId === 'all'
+              ? allCheckins
+              : allCheckins.filter(c => c.client_id === filterClientId);
+
+            if (filtered.length === 0) {
+              list.innerHTML = `
+                <div class="card text-center py-12">
+                  <i data-lucide="clipboard-check" class="w-12 h-12 text-gray-700 mx-auto mb-4"></i>
+                  <p class="text-gray-500">No check-ins yet. Clients can submit check-ins from their portal.</p>
+                </div>`;
+              lucide.createIcons();
+              return;
+            }
+
+            list.innerHTML = filtered.map(c => `
+              <div class="card">
+                <div class="flex items-center justify-between mb-3">
+                  <div class="flex items-center gap-3">
+                    <div class="w-9 h-9 rounded-lg bg-electric/10 flex items-center justify-center flex-shrink-0">
+                      <i data-lucide="user" class="w-4 h-4 text-electric"></i>
+                    </div>
+                    <div>
+                      <div class="font-display font-700 text-white text-sm">${esc(clientMap[c.client_id] || 'Unknown')}</div>
+                      <div class="text-[11px] text-gray-500">${formatDate(c.submitted_at)} &bull; ${timeAgo(c.submitted_at)}</div>
+                    </div>
+                  </div>
+                  ${c.energy ? `<span class="text-[10px] font-display font-700 px-2.5 py-1 rounded-lg ${
+                    c.energy === 'peak' ? 'bg-neon/15 text-neon' :
+                    c.energy === 'great' ? 'bg-green-500/15 text-green-400' :
+                    c.energy === 'ok' ? 'bg-yellow-500/15 text-yellow-400' :
+                    'bg-red-500/15 text-red-400'
+                  }">${c.energy.toUpperCase()}</span>` : ''}
+                </div>
+                <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-3">
+                  <div class="bg-dark-600 rounded-lg px-3 py-2">
+                    <div class="text-[10px] text-gray-500 mb-0.5">Sleep</div>
+                    <div class="text-sm font-display font-700 text-white">${c.sleep ? esc(c.sleep) + 'h' : '—'}</div>
+                  </div>
+                  <div class="bg-dark-600 rounded-lg px-3 py-2">
+                    <div class="text-[10px] text-gray-500 mb-0.5">Weight</div>
+                    <div class="text-sm font-display font-700 text-white">${c.bodyweight ? esc(c.bodyweight) + ' lbs' : '—'}</div>
+                  </div>
+                  <div class="bg-dark-600 rounded-lg px-3 py-2 col-span-2 sm:col-span-1">
+                    <div class="text-[10px] text-gray-500 mb-0.5">Energy</div>
+                    <div class="text-sm font-display font-700 text-white">${c.energy ? esc(c.energy.charAt(0).toUpperCase() + c.energy.slice(1)) : '—'}</div>
+                  </div>
+                </div>
+                ${c.soreness ? `<div class="mb-2"><div class="text-[10px] text-gray-500 mb-1">SORENESS / PAIN</div><div class="text-xs text-gray-300 bg-dark-600 rounded-lg px-3 py-2">${esc(c.soreness)}</div></div>` : ''}
+                ${c.goal ? `<div><div class="text-[10px] text-gray-500 mb-1">GOAL THIS WEEK</div><div class="text-xs text-gray-300 bg-dark-600 rounded-lg px-3 py-2">${esc(c.goal)}</div></div>` : ''}
+              </div>`).join('');
+            lucide.createIcons();
+          }
+
+          renderCheckins('all');
+
+          if (filter) {
+            filter.onchange = () => renderCheckins(filter.value);
+          }
+        } catch (err) {
+          console.error('Check-ins load error:', err);
+        }
       }, 0);
     });
 
