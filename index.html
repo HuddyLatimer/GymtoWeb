@@ -606,8 +606,16 @@
     // ROUTE: LOGIN (#/login)
     // =============================================
     route('/login', (app) => {
-      if (currentUser && currentProfile) {
-        navigate(currentProfile.role === 'trainer' ? (currentProfile.has_paid ? '/dashboard' : '/checkout') : '/portal');
+      if (currentUser) {
+        if (currentProfile) {
+          navigate(currentProfile.role === 'trainer' ? (currentProfile.has_paid ? '/dashboard' : '/checkout') : '/portal');
+        } else {
+          // Profile not loaded yet — show loading and retry
+          app.innerHTML = `<div class="min-h-screen flex items-center justify-center">
+            <div class="text-center"><span class="spinner"></span>
+            <p class="text-gray-400 mt-4">Loading your profile…</p></div></div>`;
+          setTimeout(() => { _routing = false; handleRoute(); }, 1000);
+        }
         return;
       }
       app.innerHTML = `
@@ -697,7 +705,17 @@
     // ROUTE: SIGNUP (#/signup)
     // =============================================
     route('/signup', (app) => {
-      if (currentUser && currentProfile) { navigate('/'); return; }
+      if (currentUser) {
+        if (currentProfile) {
+          navigate(currentProfile.role === 'trainer' ? (currentProfile.has_paid ? '/dashboard' : '/checkout') : '/portal');
+        } else {
+          app.innerHTML = `<div class="min-h-screen flex items-center justify-center">
+            <div class="text-center"><span class="spinner"></span>
+            <p class="text-gray-400 mt-4">Setting up your account…</p></div></div>`;
+          setTimeout(() => { _routing = false; handleRoute(); }, 1000);
+        }
+        return;
+      }
       app.innerHTML = `
       ${navBar(false)}
       <div class="min-h-screen flex items-center justify-center pt-20 px-4">
@@ -829,7 +847,17 @@
     // ROUTE: CLIENT INVITE SIGNUP (#/signup/client/:code)
     // =============================================
     route('/signup/client/:code', (app, params) => {
-      if (currentUser && currentProfile) { navigate('/'); return; }
+      if (currentUser) {
+        if (currentProfile) {
+          navigate(currentProfile.role === 'trainer' ? (currentProfile.has_paid ? '/dashboard' : '/checkout') : '/portal');
+        } else {
+          app.innerHTML = `<div class="min-h-screen flex items-center justify-center">
+            <div class="text-center"><span class="spinner"></span>
+            <p class="text-gray-400 mt-4">Setting up your account…</p></div></div>`;
+          setTimeout(() => { _routing = false; handleRoute(); }, 1000);
+        }
+        return;
+      }
       const safeCode = esc(params.code);
       app.innerHTML = `
       ${navBar(false)}
