@@ -148,7 +148,7 @@
     'use strict';
 
     // =============================================
-    // CONFIG — Replace these with your actual keys
+    // CONFIG
     // =============================================
     const CONFIG = {
       SUPABASE_URL: 'https://rlztmvzgkldhmebewpfe.supabase.co',
@@ -162,6 +162,16 @@
     const supabase = window.supabase.createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_ANON_KEY);
     let currentUser = null;
     let currentProfile = null;
+
+    // =============================================
+    // XSS PROTECTION
+    // =============================================
+    function esc(str) {
+      if (str == null) return '';
+      const d = document.createElement('div');
+      d.appendChild(document.createTextNode(String(str)));
+      return d.innerHTML;
+    }
 
     // =============================================
     // UTILITIES
@@ -209,6 +219,11 @@
       }
     }
 
+    // Cleanup registry for intervals/timeouts on route change
+    let _cleanups = [];
+    function registerCleanup(fn) { _cleanups.push(fn); }
+    function runCleanups() { _cleanups.forEach(fn => { try { fn(); } catch(e) {} }); _cleanups = []; }
+
     // =============================================
     // ROUTER
     // =============================================
@@ -220,14 +235,11 @@
     }
 
     function getRoute() {
-      const hash = window.location.hash.slice(1) || '/';
-      return hash;
+      return window.location.hash.slice(1) || '/';
     }
 
     function matchRoute(path) {
-      // Try exact match first
       if (routes[path]) return { handler: routes[path], params: {} };
-      // Try parameterized routes
       for (const [pattern, handler] of Object.entries(routes)) {
         const patternParts = pattern.split('/');
         const pathParts = path.split('/');
@@ -236,7 +248,7 @@
         let match = true;
         for (let i = 0; i < patternParts.length; i++) {
           if (patternParts[i].startsWith(':')) {
-            params[patternParts[i].slice(1)] = pathParts[i];
+            params[patternParts[i].slice(1)] = decodeURIComponent(pathParts[i]);
           } else if (patternParts[i] !== pathParts[i]) {
             match = false; break;
           }
@@ -246,24 +258,26 @@
       return null;
     }
 
+    let _routeTimer = null;
     let _routing = false;
+
     async function handleRoute() {
       if (_routing) return;
       _routing = true;
       try {
+        runCleanups();
         const path = getRoute();
         const app = document.getElementById('app');
 
-        // Check auth state
         const { data: { session } } = await supabase.auth.getSession();
         currentUser = session?.user || null;
 
         if (currentUser) {
-          const { data, error } = await supabase.from('profiles').select('*').eq('id', currentUser.id).maybeSingle();
+          const { data, error } = await supabase.from('profiles')
+            .select('*').eq('id', currentUser.id).maybeSingle();
+
           if (error) {
             console.error('Profile fetch error:', error.message);
-            // Profile might not exist yet (trigger failed or race condition)
-            // Create it manually as fallback
             const meta = currentUser.user_metadata || {};
             const { data: newProfile, error: insertErr } = await supabase.from('profiles').upsert({
               id: currentUser.id,
@@ -273,6 +287,17 @@
               invite_code: meta.role === 'client' ? null : Math.random().toString(36).slice(2, 14),
             }).select().single();
             currentProfile = insertErr ? null : newProfile;
+          } else if (!data) {
+            // Profile doesn't exist yet (trigger may have failed)
+            const meta = currentUser.user_metadata || {};
+            const { data: newProfile } = await supabase.from('profiles').upsert({
+              id: currentUser.id,
+              role: meta.role || 'trainer',
+              full_name: meta.full_name || '',
+              email: currentUser.email || '',
+              invite_code: meta.role === 'client' ? null : Math.random().toString(36).slice(2, 14),
+            }).select().single();
+            currentProfile = newProfile || null;
           } else {
             currentProfile = data;
           }
@@ -287,12 +312,18 @@
           app.innerHTML = render404();
         }
         lucide.createIcons();
+      } catch (err) {
+        console.error('Route error:', err);
       } finally {
         _routing = false;
       }
     }
 
-    window.addEventListener('hashchange', () => handleRoute());
+    // Debounced hashchange to prevent rapid-fire navigation
+    window.addEventListener('hashchange', () => {
+      clearTimeout(_routeTimer);
+      _routeTimer = setTimeout(() => handleRoute(), 50);
+    });
 
     function render404() {
       return `
@@ -306,25 +337,38 @@
     }
 
     // =============================================
-    // AUTH GUARDS
+    // AUTH GUARDS — safe against null profile
     // =============================================
     function requireAuth(app) {
       if (!currentUser) { navigate('/login'); return false; }
+      if (!currentProfile) {
+        app.innerHTML = `<div class="min-h-screen flex items-center justify-center">
+          <div class="text-center">
+            <span class="spinner"></span>
+            <p class="text-gray-400 mt-4">Loading your profile…</p>
+          </div>
+        </div>`;
+        return false;
+      }
       return true;
     }
     function requireTrainer(app) {
       if (!requireAuth(app)) return false;
-      if (currentProfile?.role !== 'trainer') { navigate('/portal'); return false; }
+      if (currentProfile.role === 'client') { navigate('/portal'); return false; }
       return true;
     }
     function requirePaid(app) {
       if (!requireTrainer(app)) return false;
-      if (!currentProfile?.has_paid) { navigate('/checkout'); return false; }
+      if (!currentProfile.has_paid) { navigate('/checkout'); return false; }
       return true;
     }
     function requireClient(app) {
       if (!requireAuth(app)) return false;
-      if (currentProfile?.role !== 'client') { navigate('/dashboard'); return false; }
+      if (currentProfile.role === 'trainer') {
+        if (currentProfile.has_paid) { navigate('/dashboard'); }
+        else { navigate('/checkout'); }
+        return false;
+      }
       return true;
     }
 
@@ -346,7 +390,7 @@
                 <span class="font-display font-800 text-lg"><span class="text-white">Gym</span><span class="text-neon">to</span><span class="text-white">Web</span></span>
               </a>
               <div class="flex items-center gap-4">
-                <span class="text-sm text-gray-400 hidden sm:inline">${currentProfile?.full_name || currentUser?.email}</span>
+                <span class="text-sm text-gray-400 hidden sm:inline">${esc(currentProfile?.full_name || currentUser?.email)}</span>
                 <button onclick="window.GTW.logout()" class="text-sm text-gray-500 hover:text-red-400 transition-colors flex items-center gap-1">
                   <i data-lucide="log-out" class="w-4 h-4"></i>
                   <span class="hidden sm:inline">Logout</span>
@@ -409,18 +453,34 @@
         const close = document.getElementById('close-nav-main');
         if (btn && nav) {
           btn.onclick = () => nav.classList.add('open');
-          close.onclick = () => nav.classList.remove('open');
+          if (close) close.onclick = () => nav.classList.remove('open');
           $$('.nav-close', nav).forEach(l => l.onclick = () => nav.classList.remove('open'));
         }
       }, 0);
+    }
+
+    function dashSidebar(active) {
+      return `
+        <div class="lg:w-56 flex-shrink-0">
+          <div class="lg:sticky lg:top-24 space-y-1">
+            <a href="#/dashboard" class="sidebar-link ${active === 'overview' ? 'active' : ''}"><i data-lucide="layout-dashboard" class="w-4 h-4"></i> Overview</a>
+            <a href="#/dashboard/clients" class="sidebar-link ${active === 'clients' ? 'active' : ''}"><i data-lucide="users" class="w-4 h-4"></i> Clients</a>
+            <a href="#/dashboard/plans" class="sidebar-link ${active === 'plans' ? 'active' : ''}"><i data-lucide="dumbbell" class="w-4 h-4"></i> Plans</a>
+          </div>
+        </div>`;
     }
 
     // =============================================
     // ROUTE: LANDING PAGE (#/)
     // =============================================
     route('/', (app) => {
-      if (currentUser) {
-        navigate(currentProfile?.role === 'trainer' ? '/dashboard' : '/portal');
+      // If logged in, redirect to appropriate page
+      if (currentUser && currentProfile) {
+        if (currentProfile.role === 'trainer') {
+          navigate(currentProfile.has_paid ? '/dashboard' : '/checkout');
+        } else {
+          navigate('/portal');
+        }
         return;
       }
       app.innerHTML = `
@@ -561,8 +621,8 @@
     // ROUTE: LOGIN (#/login)
     // =============================================
     route('/login', (app) => {
-      if (currentUser) {
-        navigate(currentProfile?.role === 'trainer' ? '/dashboard' : '/portal');
+      if (currentUser && currentProfile) {
+        navigate(currentProfile.role === 'trainer' ? (currentProfile.has_paid ? '/dashboard' : '/checkout') : '/portal');
         return;
       }
       app.innerHTML = `
@@ -579,11 +639,11 @@
           <form id="login-form" class="card space-y-4">
             <div>
               <label class="text-xs text-gray-400 font-medium block mb-1.5">Email</label>
-              <input type="email" id="login-email" class="input" placeholder="you@example.com" required />
+              <input type="email" id="login-email" class="input" placeholder="you@example.com" required autocomplete="email" />
             </div>
             <div>
               <label class="text-xs text-gray-400 font-medium block mb-1.5">Password</label>
-              <input type="password" id="login-password" class="input" placeholder="Your password" required />
+              <input type="password" id="login-password" class="input" placeholder="Your password" required autocomplete="current-password" />
             </div>
             <button type="submit" id="login-btn" class="btn-neon w-full">Log In</button>
             <div class="flex items-center justify-between text-sm">
@@ -598,6 +658,7 @@
 
       setTimeout(() => {
         const form = document.getElementById('login-form');
+        if (!form) return;
         form.onsubmit = async (e) => {
           e.preventDefault();
           const btn = document.getElementById('login-btn');
@@ -606,10 +667,18 @@
           btn.disabled = true;
           errEl.classList.add('hidden');
 
-          const { error } = await supabase.auth.signInWithPassword({
-            email: document.getElementById('login-email').value,
-            password: document.getElementById('login-password').value,
-          });
+          const email = document.getElementById('login-email').value.trim();
+          const password = document.getElementById('login-password').value;
+
+          if (!email || !password) {
+            errEl.textContent = 'Please fill in all fields.';
+            errEl.classList.remove('hidden');
+            btn.textContent = 'Log In';
+            btn.disabled = false;
+            return;
+          }
+
+          const { error } = await supabase.auth.signInWithPassword({ email, password });
 
           if (error) {
             errEl.textContent = error.message;
@@ -618,19 +687,24 @@
             btn.disabled = false;
           } else {
             showToast('Welcome back!');
+            // Let handleRoute pick up the new session
+            _routing = false;
             await handleRoute();
           }
         };
 
-        document.getElementById('forgot-btn').onclick = async () => {
-          const email = document.getElementById('login-email').value;
-          if (!email) { showToast('Enter your email first', true); return; }
-          const { error } = await supabase.auth.resetPasswordForEmail(email, {
-            redirectTo: window.location.origin + '/#/login',
-          });
-          if (error) showToast(error.message, true);
-          else showToast('Password reset email sent!');
-        };
+        const forgotBtn = document.getElementById('forgot-btn');
+        if (forgotBtn) {
+          forgotBtn.onclick = async () => {
+            const email = document.getElementById('login-email').value.trim();
+            if (!email) { showToast('Enter your email first', true); return; }
+            const { error } = await supabase.auth.resetPasswordForEmail(email, {
+              redirectTo: window.location.origin + '/#/login',
+            });
+            if (error) showToast(error.message, true);
+            else showToast('Password reset email sent!');
+          };
+        }
       }, 0);
     });
 
@@ -638,7 +712,7 @@
     // ROUTE: SIGNUP (#/signup)
     // =============================================
     route('/signup', (app) => {
-      if (currentUser) { navigate('/'); return; }
+      if (currentUser && currentProfile) { navigate('/'); return; }
       app.innerHTML = `
       ${navBar(false)}
       <div class="min-h-screen flex items-center justify-center pt-20 px-4">
@@ -664,19 +738,19 @@
             </div>
             <div>
               <label class="text-xs text-gray-400 font-medium block mb-1.5">Full Name</label>
-              <input type="text" id="signup-name" class="input" placeholder="Your name" required />
+              <input type="text" id="signup-name" class="input" placeholder="Your name" required maxlength="100" autocomplete="name" />
             </div>
             <div>
               <label class="text-xs text-gray-400 font-medium block mb-1.5">Email</label>
-              <input type="email" id="signup-email" class="input" placeholder="you@example.com" required />
+              <input type="email" id="signup-email" class="input" placeholder="you@example.com" required autocomplete="email" />
             </div>
             <div>
               <label class="text-xs text-gray-400 font-medium block mb-1.5">Password</label>
-              <input type="password" id="signup-password" class="input" placeholder="Min 6 characters" required minlength="6" />
+              <input type="password" id="signup-password" class="input" placeholder="Min 8 characters" required minlength="8" autocomplete="new-password" />
             </div>
             <div id="invite-field" class="hidden">
               <label class="text-xs text-gray-400 font-medium block mb-1.5">Trainer Invite Code</label>
-              <input type="text" id="signup-invite" class="input" placeholder="Enter code from your trainer" />
+              <input type="text" id="signup-invite" class="input" placeholder="Enter code from your trainer" maxlength="50" />
             </div>
             <button type="submit" id="signup-btn" class="btn-neon w-full">Create Account</button>
             <p class="text-center text-sm text-gray-500">Already have an account? <a href="#/login" class="text-electric hover:underline">Log in</a></p>
@@ -701,7 +775,9 @@
           };
         });
 
-        document.getElementById('signup-form').onsubmit = async (e) => {
+        const form = document.getElementById('signup-form');
+        if (!form) return;
+        form.onsubmit = async (e) => {
           e.preventDefault();
           const btn = document.getElementById('signup-btn');
           const errEl = document.getElementById('signup-error');
@@ -709,15 +785,30 @@
           btn.disabled = true;
           errEl.classList.add('hidden');
 
+          const name = document.getElementById('signup-name').value.trim();
+          const email = document.getElementById('signup-email').value.trim();
+          const password = document.getElementById('signup-password').value;
+
+          if (!name || !email || !password) {
+            errEl.textContent = 'Please fill in all fields.';
+            errEl.classList.remove('hidden');
+            btn.textContent = 'Create Account';
+            btn.disabled = false;
+            return;
+          }
+
+          if (password.length < 8) {
+            errEl.textContent = 'Password must be at least 8 characters.';
+            errEl.classList.remove('hidden');
+            btn.textContent = 'Create Account';
+            btn.disabled = false;
+            return;
+          }
+
           const { data, error } = await supabase.auth.signUp({
-            email: document.getElementById('signup-email').value,
-            password: document.getElementById('signup-password').value,
-            options: {
-              data: {
-                full_name: document.getElementById('signup-name').value,
-                role: selectedRole,
-              }
-            }
+            email,
+            password,
+            options: { data: { full_name: name, role: selectedRole } }
           });
 
           if (error) {
@@ -729,7 +820,7 @@
           }
 
           // If client, link to trainer via invite code
-          if (selectedRole === 'client') {
+          if (selectedRole === 'client' && data.session) {
             const inviteCode = document.getElementById('signup-invite').value.trim();
             if (inviteCode) {
               const { error: linkErr } = await supabase.rpc('link_client_to_trainer', { code: inviteCode });
@@ -738,11 +829,11 @@
           }
 
           if (data.user && !data.session) {
-            // Email confirmation required
             showToast('Check your email to confirm your account!');
             navigate('/login');
           } else {
             showToast('Account created!');
+            _routing = false;
             await handleRoute();
           }
         };
@@ -753,7 +844,8 @@
     // ROUTE: CLIENT INVITE SIGNUP (#/signup/client/:code)
     // =============================================
     route('/signup/client/:code', (app, params) => {
-      if (currentUser) { navigate('/'); return; }
+      if (currentUser && currentProfile) { navigate('/'); return; }
+      const safeCode = esc(params.code);
       app.innerHTML = `
       ${navBar(false)}
       <div class="min-h-screen flex items-center justify-center pt-20 px-4">
@@ -768,19 +860,19 @@
           <form id="invite-signup-form" class="card space-y-4">
             <div class="bg-dark-600 rounded-lg px-4 py-3 flex items-center gap-2">
               <i data-lucide="link" class="w-4 h-4 text-electric"></i>
-              <span class="text-sm text-electric font-display font-600">Invite: ${params.code}</span>
+              <span class="text-sm text-electric font-display font-600">Invite: ${safeCode}</span>
             </div>
             <div>
               <label class="text-xs text-gray-400 font-medium block mb-1.5">Full Name</label>
-              <input type="text" id="inv-name" class="input" placeholder="Your name" required />
+              <input type="text" id="inv-name" class="input" placeholder="Your name" required maxlength="100" autocomplete="name" />
             </div>
             <div>
               <label class="text-xs text-gray-400 font-medium block mb-1.5">Email</label>
-              <input type="email" id="inv-email" class="input" placeholder="you@example.com" required />
+              <input type="email" id="inv-email" class="input" placeholder="you@example.com" required autocomplete="email" />
             </div>
             <div>
               <label class="text-xs text-gray-400 font-medium block mb-1.5">Password</label>
-              <input type="password" id="inv-password" class="input" placeholder="Min 6 characters" required minlength="6" />
+              <input type="password" id="inv-password" class="input" placeholder="Min 8 characters" required minlength="8" autocomplete="new-password" />
             </div>
             <button type="submit" id="inv-btn" class="btn-neon w-full">Create Client Account</button>
             <div id="inv-error" class="text-red-400 text-sm text-center hidden"></div>
@@ -790,7 +882,9 @@
       initMobileNav();
 
       setTimeout(() => {
-        document.getElementById('invite-signup-form').onsubmit = async (e) => {
+        const form = document.getElementById('invite-signup-form');
+        if (!form) return;
+        form.onsubmit = async (e) => {
           e.preventDefault();
           const btn = document.getElementById('inv-btn');
           const errEl = document.getElementById('inv-error');
@@ -798,10 +892,22 @@
           btn.disabled = true;
           errEl.classList.add('hidden');
 
+          const name = document.getElementById('inv-name').value.trim();
+          const email = document.getElementById('inv-email').value.trim();
+          const password = document.getElementById('inv-password').value;
+
+          if (!name || !email || password.length < 8) {
+            errEl.textContent = 'Please fill in all fields (password min 8 chars).';
+            errEl.classList.remove('hidden');
+            btn.textContent = 'Create Client Account';
+            btn.disabled = false;
+            return;
+          }
+
           const { data, error } = await supabase.auth.signUp({
-            email: document.getElementById('inv-email').value,
-            password: document.getElementById('inv-password').value,
-            options: { data: { full_name: document.getElementById('inv-name').value, role: 'client' } }
+            email,
+            password,
+            options: { data: { full_name: name, role: 'client' } }
           });
 
           if (error) {
@@ -812,16 +918,17 @@
             return;
           }
 
-          // Link to trainer
           if (data.session) {
-            await supabase.rpc('link_client_to_trainer', { code: params.code });
+            const { error: linkErr } = await supabase.rpc('link_client_to_trainer', { code: params.code });
+            if (linkErr) showToast('Could not link to trainer: ' + linkErr.message, true);
           }
 
           if (data.user && !data.session) {
             showToast('Check your email to confirm!');
             navigate('/login');
           } else {
-            showToast('Welcome! You\'re linked to your trainer.');
+            showToast("Welcome! You're linked to your trainer.");
+            _routing = false;
             await handleRoute();
           }
         };
@@ -833,7 +940,9 @@
     // =============================================
     route('/checkout', async (app) => {
       if (!requireAuth(app)) return;
-      if (currentProfile?.has_paid) { navigate('/dashboard'); return; }
+      // Only trainers need to pay
+      if (currentProfile.role === 'client') { navigate('/portal'); return; }
+      if (currentProfile.has_paid) { navigate('/dashboard'); return; }
 
       app.innerHTML = `
       ${navBar(true)}
@@ -867,66 +976,82 @@
       </div>`;
 
       setTimeout(async () => {
-        const stripe = Stripe(CONFIG.STRIPE_PK);
-        const elements = stripe.elements({
-          appearance: {
-            theme: 'night',
-            variables: { colorPrimary: '#DFFF00', colorBackground: '#242429', colorText: '#E5E5E5', borderRadius: '8px' }
-          }
-        });
-        const cardElement = elements.create('card');
-        cardElement.mount('#stripe-card-element');
-
-        cardElement.on('change', (event) => {
-          const errEl = document.getElementById('card-errors');
-          if (event.error) {
-            errEl.textContent = event.error.message;
-            errEl.classList.remove('hidden');
-          } else {
-            errEl.classList.add('hidden');
-          }
-        });
-
-        document.getElementById('pay-btn').onclick = async () => {
-          const btn = document.getElementById('pay-btn');
-          btn.innerHTML = '<span class="spinner"></span> Processing...';
-          btn.disabled = true;
-
-          try {
-            // Create payment intent via Netlify Function
-            const { data: { session } } = await supabase.auth.getSession();
-            const res = await fetch('/.netlify/functions/create-checkout', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
-              body: JSON.stringify({ userId: currentUser.id, email: currentUser.email }),
-            });
-
-            if (!res.ok) throw new Error('Could not create payment');
-            const { clientSecret } = await res.json();
-
-            const { error, paymentIntent } = await stripe.confirmCardPayment(clientSecret, {
-              payment_method: { card: cardElement }
-            });
-
-            if (error) {
-              document.getElementById('card-errors').textContent = error.message;
-              document.getElementById('card-errors').classList.remove('hidden');
-              btn.textContent = 'Pay $497 CAD';
-              btn.disabled = false;
-            } else if (paymentIntent.status === 'succeeded') {
-              // Update profile (webhook will also do this, but let's be instant)
-              await supabase.from('profiles').update({ has_paid: true }).eq('id', currentUser.id);
-              showToast('Payment successful! Welcome aboard!');
-              triggerConfetti(btn);
-              setTimeout(() => navigate('/dashboard'), 1500);
+        try {
+          const stripe = Stripe(CONFIG.STRIPE_PK);
+          const elements = stripe.elements({
+            appearance: {
+              theme: 'night',
+              variables: { colorPrimary: '#DFFF00', colorBackground: '#242429', colorText: '#E5E5E5', borderRadius: '8px' }
             }
-          } catch (err) {
-            document.getElementById('card-errors').textContent = err.message;
-            document.getElementById('card-errors').classList.remove('hidden');
-            btn.textContent = 'Pay $497 CAD';
-            btn.disabled = false;
-          }
-        };
+          });
+          const cardElement = elements.create('card');
+          cardElement.mount('#stripe-card-element');
+
+          cardElement.on('change', (event) => {
+            const errEl = document.getElementById('card-errors');
+            if (!errEl) return;
+            if (event.error) {
+              errEl.textContent = event.error.message;
+              errEl.classList.remove('hidden');
+            } else {
+              errEl.classList.add('hidden');
+            }
+          });
+
+          const payBtn = document.getElementById('pay-btn');
+          if (!payBtn) return;
+
+          payBtn.onclick = async () => {
+            payBtn.innerHTML = '<span class="spinner"></span> Processing...';
+            payBtn.disabled = true;
+
+            try {
+              const { data: { session } } = await supabase.auth.getSession();
+              if (!session) { showToast('Session expired. Please log in again.', true); navigate('/login'); return; }
+
+              const res = await fetch('/.netlify/functions/create-checkout', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Authorization': `Bearer ${session.access_token}`
+                },
+                body: JSON.stringify({ userId: currentUser.id, email: currentUser.email }),
+              });
+
+              if (!res.ok) {
+                const errData = await res.json().catch(() => ({}));
+                throw new Error(errData.error || 'Could not create payment');
+              }
+              const { clientSecret } = await res.json();
+
+              const { error, paymentIntent } = await stripe.confirmCardPayment(clientSecret, {
+                payment_method: { card: cardElement }
+              });
+
+              if (error) {
+                const errEl = document.getElementById('card-errors');
+                if (errEl) { errEl.textContent = error.message; errEl.classList.remove('hidden'); }
+                payBtn.textContent = 'Pay $497 CAD';
+                payBtn.disabled = false;
+              } else if (paymentIntent.status === 'succeeded') {
+                showToast('Payment successful! Welcome aboard!');
+                triggerConfetti(payBtn);
+                // Don't trust client-side update alone — webhook will confirm.
+                // But update locally for instant UX
+                currentProfile.has_paid = true;
+                setTimeout(() => navigate('/dashboard'), 1500);
+              }
+            } catch (err) {
+              const errEl = document.getElementById('card-errors');
+              if (errEl) { errEl.textContent = err.message; errEl.classList.remove('hidden'); }
+              payBtn.textContent = 'Pay $497 CAD';
+              payBtn.disabled = false;
+            }
+          };
+        } catch (err) {
+          console.error('Stripe init error:', err);
+          showToast('Payment system failed to load. Please refresh.', true);
+        }
       }, 100);
     });
 
@@ -941,23 +1066,14 @@
       <div class="pt-20 pb-12">
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div class="flex flex-col lg:flex-row gap-6 mt-4">
-            <!-- Sidebar -->
-            <div class="lg:w-56 flex-shrink-0">
-              <div class="lg:sticky lg:top-24 space-y-1">
-                <a href="#/dashboard" class="sidebar-link active"><i data-lucide="layout-dashboard" class="w-4 h-4"></i> Overview</a>
-                <a href="#/dashboard/clients" class="sidebar-link"><i data-lucide="users" class="w-4 h-4"></i> Clients</a>
-                <a href="#/dashboard/plans" class="sidebar-link"><i data-lucide="dumbbell" class="w-4 h-4"></i> Plans</a>
-              </div>
-            </div>
-            <!-- Main -->
+            ${dashSidebar('overview')}
             <div class="flex-1 min-w-0">
               <h1 class="font-display font-800 text-2xl sm:text-3xl mb-6">Dashboard</h1>
-              <div class="grid sm:grid-cols-3 gap-4 mb-8" id="dash-stats">
+              <div class="grid sm:grid-cols-3 gap-4 mb-8">
                 <div class="card text-center"><div class="text-gray-500 text-xs mb-1">Clients</div><div class="font-display font-800 text-3xl text-white" id="stat-clients">-</div></div>
                 <div class="card text-center"><div class="text-gray-500 text-xs mb-1">Plans</div><div class="font-display font-800 text-3xl text-white" id="stat-plans">-</div></div>
                 <div class="card text-center"><div class="text-gray-500 text-xs mb-1">Check-Ins (7d)</div><div class="font-display font-800 text-3xl text-white" id="stat-recent-checkins">-</div></div>
               </div>
-              <!-- Invite Link -->
               <div class="card mb-6">
                 <div class="flex items-center gap-2 mb-3">
                   <i data-lucide="link" class="w-5 h-5 text-electric"></i>
@@ -969,11 +1085,10 @@
                 </div>
                 <p class="text-[11px] text-gray-600 mt-2">Share this link with clients so they can sign up and be linked to your account.</p>
               </div>
-              <!-- Recent Check-ins -->
               <div class="card">
                 <h2 class="font-display font-700 text-lg mb-4">Recent Check-Ins</h2>
                 <div id="recent-checkins-list" class="space-y-3">
-                  <div class="text-center text-gray-600 text-sm py-6">Loading...</div>
+                  <div class="text-center text-gray-600 text-sm py-6"><span class="spinner"></span></div>
                 </div>
               </div>
             </div>
@@ -981,51 +1096,59 @@
         </div>
       </div>`;
 
-      // Load data
       setTimeout(async () => {
-        // Get clients
-        const { data: clients } = await supabase.from('profiles').select('*').eq('trainer_id', currentUser.id);
-        document.getElementById('stat-clients').textContent = clients?.length || 0;
+        try {
+          const { data: clients } = await supabase.from('profiles').select('*').eq('trainer_id', currentUser.id);
+          const el = document.getElementById('stat-clients');
+          if (el) el.textContent = clients?.length || 0;
 
-        // Get plans
-        const { data: plans } = await supabase.from('workout_plans').select('*').eq('trainer_id', currentUser.id);
-        document.getElementById('stat-plans').textContent = plans?.length || 0;
+          const { data: plans } = await supabase.from('workout_plans').select('id').eq('trainer_id', currentUser.id);
+          const plansEl = document.getElementById('stat-plans');
+          if (plansEl) plansEl.textContent = plans?.length || 0;
 
-        // Set invite link
-        const inviteUrl = `${window.location.origin}/#/signup/client/${currentProfile.invite_code}`;
-        document.getElementById('invite-link').value = inviteUrl;
-        document.getElementById('copy-invite').onclick = () => {
-          navigator.clipboard.writeText(inviteUrl);
-          showToast('Invite link copied!');
-        };
+          const inviteUrl = `${window.location.origin}/#/signup/client/${encodeURIComponent(currentProfile.invite_code)}`;
+          const invLink = document.getElementById('invite-link');
+          if (invLink) invLink.value = inviteUrl;
 
-        // Recent check-ins from all clients
-        const clientIds = (clients || []).map(c => c.id);
-        let recentCheckins = [];
-        if (clientIds.length > 0) {
-          const weekAgo = new Date(Date.now() - 7*24*60*60*1000).toISOString();
-          const { data: checkins } = await supabase.from('checkins').select('*')
-            .in('client_id', clientIds).gte('submitted_at', weekAgo).order('submitted_at', { ascending: false }).limit(10);
-          recentCheckins = checkins || [];
-          document.getElementById('stat-recent-checkins').textContent = recentCheckins.length;
-        } else {
-          document.getElementById('stat-recent-checkins').textContent = 0;
-        }
+          const copyBtn = document.getElementById('copy-invite');
+          if (copyBtn) {
+            copyBtn.onclick = () => {
+              navigator.clipboard.writeText(inviteUrl).then(() => showToast('Invite link copied!'))
+                .catch(() => { invLink.select(); document.execCommand('copy'); showToast('Copied!'); });
+            };
+          }
 
-        const list = document.getElementById('recent-checkins-list');
-        if (recentCheckins.length === 0) {
-          list.innerHTML = '<div class="text-center text-gray-600 text-sm py-6">No check-ins yet. Invite clients to get started!</div>';
-        } else {
-          const clientMap = {};
-          (clients || []).forEach(c => clientMap[c.id] = c.full_name || c.email);
-          list.innerHTML = recentCheckins.map(c => `
-            <div class="flex items-center justify-between py-3 border-b border-white/5 last:border-0">
-              <div>
-                <div class="text-sm text-white font-medium">${clientMap[c.client_id] || 'Unknown'}</div>
-                <div class="text-xs text-gray-500">${c.energy || '-'} energy &bull; ${c.sleep || '-'}h sleep${c.bodyweight ? ' &bull; ' + c.bodyweight + ' lbs' : ''}</div>
-              </div>
-              <div class="text-xs text-gray-600">${timeAgo(c.submitted_at)}</div>
-            </div>`).join('');
+          const clientIds = (clients || []).map(c => c.id);
+          let recentCheckins = [];
+          if (clientIds.length > 0) {
+            const weekAgo = new Date(Date.now() - 7*24*60*60*1000).toISOString();
+            const { data: checkins } = await supabase.from('checkins').select('*')
+              .in('client_id', clientIds).gte('submitted_at', weekAgo)
+              .order('submitted_at', { ascending: false }).limit(10);
+            recentCheckins = checkins || [];
+          }
+          const statEl = document.getElementById('stat-recent-checkins');
+          if (statEl) statEl.textContent = recentCheckins.length;
+
+          const list = document.getElementById('recent-checkins-list');
+          if (!list) return;
+
+          if (recentCheckins.length === 0) {
+            list.innerHTML = '<div class="text-center text-gray-600 text-sm py-6">No check-ins yet. Invite clients to get started!</div>';
+          } else {
+            const clientMap = {};
+            (clients || []).forEach(c => clientMap[c.id] = c.full_name || c.email);
+            list.innerHTML = recentCheckins.map(c => `
+              <div class="flex items-center justify-between py-3 border-b border-white/5 last:border-0">
+                <div>
+                  <div class="text-sm text-white font-medium">${esc(clientMap[c.client_id] || 'Unknown')}</div>
+                  <div class="text-xs text-gray-500">${esc(c.energy || '-')} energy &bull; ${esc(c.sleep || '-')}h sleep${c.bodyweight ? ' &bull; ' + esc(c.bodyweight) + ' lbs' : ''}</div>
+                </div>
+                <div class="text-xs text-gray-600">${timeAgo(c.submitted_at)}</div>
+              </div>`).join('');
+          }
+        } catch (err) {
+          console.error('Dashboard load error:', err);
         }
       }, 0);
     });
@@ -1041,19 +1164,13 @@
       <div class="pt-20 pb-12">
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div class="flex flex-col lg:flex-row gap-6 mt-4">
-            <div class="lg:w-56 flex-shrink-0">
-              <div class="lg:sticky lg:top-24 space-y-1">
-                <a href="#/dashboard" class="sidebar-link"><i data-lucide="layout-dashboard" class="w-4 h-4"></i> Overview</a>
-                <a href="#/dashboard/clients" class="sidebar-link active"><i data-lucide="users" class="w-4 h-4"></i> Clients</a>
-                <a href="#/dashboard/plans" class="sidebar-link"><i data-lucide="dumbbell" class="w-4 h-4"></i> Plans</a>
-              </div>
-            </div>
+            ${dashSidebar('clients')}
             <div class="flex-1 min-w-0">
               <div class="flex items-center justify-between mb-6">
                 <h1 class="font-display font-800 text-2xl sm:text-3xl">Clients</h1>
               </div>
               <div id="clients-list" class="space-y-3">
-                <div class="text-center text-gray-600 text-sm py-6">Loading...</div>
+                <div class="text-center text-gray-600 text-sm py-6"><span class="spinner"></span></div>
               </div>
             </div>
           </div>
@@ -1061,50 +1178,59 @@
       </div>`;
 
       setTimeout(async () => {
-        const { data: clients } = await supabase.from('profiles').select('*').eq('trainer_id', currentUser.id).order('created_at', { ascending: false });
-        const list = document.getElementById('clients-list');
+        try {
+          const { data: clients } = await supabase.from('profiles').select('*').eq('trainer_id', currentUser.id).order('created_at', { ascending: false });
+          const list = document.getElementById('clients-list');
+          if (!list) return;
 
-        if (!clients || clients.length === 0) {
-          list.innerHTML = `
-            <div class="card text-center py-12">
-              <i data-lucide="users" class="w-12 h-12 text-gray-700 mx-auto mb-4"></i>
-              <p class="text-gray-500 mb-4">No clients yet. Share your invite link!</p>
-              <div class="flex items-center gap-2 max-w-md mx-auto">
-                <input type="text" class="input flex-1 text-sm" value="${window.location.origin}/#/signup/client/${currentProfile.invite_code}" readonly id="invite-link-cl" />
-                <button class="btn-neon px-4 py-3 text-sm" onclick="navigator.clipboard.writeText(document.getElementById('invite-link-cl').value);window.GTW.toast('Copied!')">Copy</button>
+          if (!clients || clients.length === 0) {
+            const inviteUrl = `${window.location.origin}/#/signup/client/${encodeURIComponent(currentProfile.invite_code)}`;
+            list.innerHTML = `
+              <div class="card text-center py-12">
+                <i data-lucide="users" class="w-12 h-12 text-gray-700 mx-auto mb-4"></i>
+                <p class="text-gray-500 mb-4">No clients yet. Share your invite link!</p>
+                <div class="flex items-center gap-2 max-w-md mx-auto">
+                  <input type="text" class="input flex-1 text-sm" value="${esc(inviteUrl)}" readonly id="invite-link-cl" />
+                  <button class="btn-neon px-4 py-3 text-sm" id="copy-inv-cl">Copy</button>
+                </div>
+              </div>`;
+            lucide.createIcons();
+            const copyBtn = document.getElementById('copy-inv-cl');
+            if (copyBtn) copyBtn.onclick = () => {
+              navigator.clipboard.writeText(inviteUrl).then(() => showToast('Copied!')).catch(() => showToast('Copy failed', true));
+            };
+            return;
+          }
+
+          const clientIds = clients.map(c => c.id);
+          const { data: checkins } = await supabase.from('checkins').select('client_id').in('client_id', clientIds);
+          const { data: assignments } = await supabase.from('client_workouts').select('client_id, plan_id').in('client_id', clientIds);
+
+          const checkinCounts = {};
+          (checkins || []).forEach(c => { checkinCounts[c.client_id] = (checkinCounts[c.client_id] || 0) + 1; });
+          const planCounts = {};
+          (assignments || []).forEach(a => { planCounts[a.client_id] = (planCounts[a.client_id] || 0) + 1; });
+
+          list.innerHTML = clients.map(c => `
+            <div class="card card-hover flex items-center justify-between">
+              <div class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-xl bg-neon/10 flex items-center justify-center">
+                  <i data-lucide="user" class="w-5 h-5 text-neon"></i>
+                </div>
+                <div>
+                  <div class="font-display font-700 text-white">${esc(c.full_name || 'Unnamed')}</div>
+                  <div class="text-xs text-gray-500">${esc(c.email)} &bull; Joined ${formatDate(c.created_at)}</div>
+                </div>
               </div>
-            </div>`;
+              <div class="flex items-center gap-4 text-xs text-gray-500">
+                <span>${planCounts[c.id] || 0} plans</span>
+                <span>${checkinCounts[c.id] || 0} check-ins</span>
+              </div>
+            </div>`).join('');
           lucide.createIcons();
-          return;
+        } catch (err) {
+          console.error('Clients load error:', err);
         }
-
-        // Get check-in counts and assigned plans for each client
-        const clientIds = clients.map(c => c.id);
-        const { data: checkins } = await supabase.from('checkins').select('client_id').in('client_id', clientIds);
-        const { data: assignments } = await supabase.from('client_workouts').select('client_id, plan_id').in('client_id', clientIds);
-
-        const checkinCounts = {};
-        (checkins || []).forEach(c => { checkinCounts[c.client_id] = (checkinCounts[c.client_id] || 0) + 1; });
-        const planCounts = {};
-        (assignments || []).forEach(a => { planCounts[a.client_id] = (planCounts[a.client_id] || 0) + 1; });
-
-        list.innerHTML = clients.map(c => `
-          <div class="card card-hover flex items-center justify-between" data-client-id="${c.id}">
-            <div class="flex items-center gap-3">
-              <div class="w-10 h-10 rounded-xl bg-neon/10 flex items-center justify-center">
-                <i data-lucide="user" class="w-5 h-5 text-neon"></i>
-              </div>
-              <div>
-                <div class="font-display font-700 text-white">${c.full_name || 'Unnamed'}</div>
-                <div class="text-xs text-gray-500">${c.email} &bull; Joined ${formatDate(c.created_at)}</div>
-              </div>
-            </div>
-            <div class="flex items-center gap-4 text-xs text-gray-500">
-              <span>${planCounts[c.id] || 0} plans</span>
-              <span>${checkinCounts[c.id] || 0} check-ins</span>
-            </div>
-          </div>`).join('');
-        lucide.createIcons();
       }, 0);
     });
 
@@ -1119,13 +1245,7 @@
       <div class="pt-20 pb-12">
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div class="flex flex-col lg:flex-row gap-6 mt-4">
-            <div class="lg:w-56 flex-shrink-0">
-              <div class="lg:sticky lg:top-24 space-y-1">
-                <a href="#/dashboard" class="sidebar-link"><i data-lucide="layout-dashboard" class="w-4 h-4"></i> Overview</a>
-                <a href="#/dashboard/clients" class="sidebar-link"><i data-lucide="users" class="w-4 h-4"></i> Clients</a>
-                <a href="#/dashboard/plans" class="sidebar-link active"><i data-lucide="dumbbell" class="w-4 h-4"></i> Plans</a>
-              </div>
-            </div>
+            ${dashSidebar('plans')}
             <div class="flex-1 min-w-0">
               <div class="flex items-center justify-between mb-6">
                 <h1 class="font-display font-800 text-2xl sm:text-3xl">Workout Plans</h1>
@@ -1134,16 +1254,15 @@
                 </button>
               </div>
               <div id="plans-list" class="space-y-3">
-                <div class="text-center text-gray-600 text-sm py-6">Loading...</div>
+                <div class="text-center text-gray-600 text-sm py-6"><span class="spinner"></span></div>
               </div>
-              <!-- Plan Editor (hidden by default) -->
               <div id="plan-editor" class="hidden mt-6">
                 <div class="card">
                   <h2 class="font-display font-700 text-lg mb-4" id="editor-title">New Workout Plan</h2>
                   <form id="plan-form" class="space-y-4">
                     <div>
                       <label class="text-xs text-gray-400 font-medium block mb-1.5">Plan Title</label>
-                      <input type="text" id="plan-title" class="input" placeholder="e.g. Push Day A" required />
+                      <input type="text" id="plan-title" class="input" placeholder="e.g. Push Day A" required maxlength="100" />
                     </div>
                     <div>
                       <label class="text-xs text-gray-400 font-medium block mb-1.5">Day of Week (optional)</label>
@@ -1164,7 +1283,6 @@
                       </div>
                       <div id="exercises-builder" class="space-y-2"></div>
                     </div>
-                    <!-- Assign to clients -->
                     <div>
                       <label class="text-xs text-gray-400 font-medium block mb-1.5">Assign to Clients</label>
                       <div id="assign-clients" class="space-y-2"></div>
@@ -1186,81 +1304,85 @@
       let clients = [];
 
       async function loadPlans() {
-        const { data: plans } = await supabase.from('workout_plans').select('*').eq('trainer_id', currentUser.id).order('created_at', { ascending: false });
-        const { data: cl } = await supabase.from('profiles').select('id, full_name, email').eq('trainer_id', currentUser.id);
-        clients = cl || [];
+        try {
+          const { data: plans } = await supabase.from('workout_plans').select('*').eq('trainer_id', currentUser.id).order('created_at', { ascending: false });
+          const { data: cl } = await supabase.from('profiles').select('id, full_name, email').eq('trainer_id', currentUser.id);
+          clients = cl || [];
 
-        const list = document.getElementById('plans-list');
-        if (!plans || plans.length === 0) {
-          list.innerHTML = '<div class="card text-center py-12"><p class="text-gray-500">No plans yet. Create your first workout plan!</p></div>';
-          return;
-        }
+          const list = document.getElementById('plans-list');
+          if (!list) return;
 
-        // Get assignments
-        const planIds = plans.map(p => p.id);
-        const { data: assignments } = await supabase.from('client_workouts').select('plan_id, client_id').in('plan_id', planIds);
-        const assignMap = {};
-        (assignments || []).forEach(a => {
-          if (!assignMap[a.plan_id]) assignMap[a.plan_id] = [];
-          assignMap[a.plan_id].push(a.client_id);
-        });
+          if (!plans || plans.length === 0) {
+            list.innerHTML = '<div class="card text-center py-12"><p class="text-gray-500">No plans yet. Create your first workout plan!</p></div>';
+            return;
+          }
 
-        const clientMap = {};
-        clients.forEach(c => clientMap[c.id] = c.full_name || c.email);
+          const planIds = plans.map(p => p.id);
+          const { data: assignments } = await supabase.from('client_workouts').select('plan_id, client_id').in('plan_id', planIds);
+          const assignMap = {};
+          (assignments || []).forEach(a => {
+            if (!assignMap[a.plan_id]) assignMap[a.plan_id] = [];
+            assignMap[a.plan_id].push(a.client_id);
+          });
 
-        list.innerHTML = plans.map(p => {
-          const exCount = (p.exercises || []).length;
-          const assigned = assignMap[p.id] || [];
-          const dayLabel = p.day_of_week !== null ? DAYS[p.day_of_week] : 'Any day';
-          return `
-            <div class="card card-hover">
-              <div class="flex items-center justify-between mb-2">
-                <div class="font-display font-700 text-white">${p.title}</div>
-                <div class="flex items-center gap-2">
-                  <button class="text-gray-500 hover:text-neon transition-colors edit-plan-btn" data-id="${p.id}"><i data-lucide="pencil" class="w-4 h-4"></i></button>
-                  <button class="text-gray-500 hover:text-red-400 transition-colors delete-plan-btn" data-id="${p.id}"><i data-lucide="trash-2" class="w-4 h-4"></i></button>
+          const clientMap = {};
+          clients.forEach(c => clientMap[c.id] = c.full_name || c.email);
+
+          list.innerHTML = plans.map(p => {
+            const exCount = (p.exercises || []).length;
+            const assigned = assignMap[p.id] || [];
+            const dayLabel = p.day_of_week !== null ? DAYS[p.day_of_week] : 'Any day';
+            return `
+              <div class="card card-hover">
+                <div class="flex items-center justify-between mb-2">
+                  <div class="font-display font-700 text-white">${esc(p.title)}</div>
+                  <div class="flex items-center gap-2">
+                    <button class="text-gray-500 hover:text-neon transition-colors edit-plan-btn" data-id="${esc(p.id)}"><i data-lucide="pencil" class="w-4 h-4"></i></button>
+                    <button class="text-gray-500 hover:text-red-400 transition-colors delete-plan-btn" data-id="${esc(p.id)}"><i data-lucide="trash-2" class="w-4 h-4"></i></button>
+                  </div>
                 </div>
-              </div>
-              <div class="text-xs text-gray-500">${exCount} exercises &bull; ${dayLabel} &bull; ${assigned.length} client(s) assigned</div>
-              ${assigned.length > 0 ? `<div class="flex flex-wrap gap-1 mt-2">${assigned.map(cid => `<span class="text-[10px] bg-neon/10 text-neon px-2 py-0.5 rounded">${clientMap[cid] || 'Unknown'}</span>`).join('')}</div>` : ''}
-            </div>`;
-        }).join('');
-        lucide.createIcons();
+                <div class="text-xs text-gray-500">${exCount} exercises &bull; ${dayLabel} &bull; ${assigned.length} client(s) assigned</div>
+                ${assigned.length > 0 ? `<div class="flex flex-wrap gap-1 mt-2">${assigned.map(cid => `<span class="text-[10px] bg-neon/10 text-neon px-2 py-0.5 rounded">${esc(clientMap[cid] || 'Unknown')}</span>`).join('')}</div>` : ''}
+              </div>`;
+          }).join('');
+          lucide.createIcons();
 
-        // Edit buttons
-        $$('.edit-plan-btn').forEach(btn => {
-          btn.onclick = () => {
-            const plan = plans.find(p => p.id === btn.dataset.id);
-            if (plan) openEditor(plan, assignMap[plan.id] || []);
-          };
-        });
+          $$('.edit-plan-btn').forEach(btn => {
+            btn.onclick = () => {
+              const plan = plans.find(p => p.id === btn.dataset.id);
+              if (plan) openEditor(plan, assignMap[plan.id] || []);
+            };
+          });
 
-        // Delete buttons
-        $$('.delete-plan-btn').forEach(btn => {
-          btn.onclick = async () => {
-            if (!confirm('Delete this plan?')) return;
-            await supabase.from('client_workouts').delete().eq('plan_id', btn.dataset.id);
-            await supabase.from('workout_plans').delete().eq('id', btn.dataset.id);
-            showToast('Plan deleted');
-            loadPlans();
-          };
-        });
+          $$('.delete-plan-btn').forEach(btn => {
+            btn.onclick = async () => {
+              if (!confirm('Delete this plan?')) return;
+              await supabase.from('client_workouts').delete().eq('plan_id', btn.dataset.id);
+              await supabase.from('workout_plans').delete().eq('id', btn.dataset.id);
+              showToast('Plan deleted');
+              loadPlans();
+            };
+          });
+        } catch (err) {
+          console.error('Plans load error:', err);
+        }
       }
 
       function renderExerciseRow(ex, idx) {
         return `
           <div class="flex items-center gap-2 bg-dark-600 rounded-lg p-2" data-ex-idx="${idx}">
             <span class="text-neon font-display font-700 text-xs w-6 text-center">${String(idx+1).padStart(2,'0')}</span>
-            <input type="text" class="input flex-1 py-1.5 text-sm ex-name" placeholder="Exercise name" value="${ex.name || ''}" />
-            <input type="text" class="input w-14 py-1.5 text-sm text-center ex-sets" placeholder="Sets" value="${ex.sets || ''}" />
-            <input type="text" class="input w-16 py-1.5 text-sm text-center ex-reps" placeholder="Reps" value="${ex.reps || ''}" />
-            <input type="text" class="input w-24 py-1.5 text-sm ex-note" placeholder="Note" value="${ex.note || ''}" />
+            <input type="text" class="input flex-1 py-1.5 text-sm ex-name" placeholder="Exercise name" value="${esc(ex.name || '')}" maxlength="100" />
+            <input type="text" class="input w-14 py-1.5 text-sm text-center ex-sets" placeholder="Sets" value="${esc(ex.sets || '')}" maxlength="10" />
+            <input type="text" class="input w-16 py-1.5 text-sm text-center ex-reps" placeholder="Reps" value="${esc(ex.reps || '')}" maxlength="20" />
+            <input type="text" class="input w-24 py-1.5 text-sm ex-note" placeholder="Note" value="${esc(ex.note || '')}" maxlength="200" />
             <button type="button" class="text-gray-600 hover:text-red-400 remove-ex" data-idx="${idx}"><i data-lucide="x" class="w-4 h-4"></i></button>
           </div>`;
       }
 
       function renderExercisesBuilder() {
         const builder = document.getElementById('exercises-builder');
+        if (!builder) return;
         builder.innerHTML = exercises.map((ex, i) => renderExerciseRow(ex, i)).join('');
         if (exercises.length === 0) {
           builder.innerHTML = '<div class="text-center text-gray-600 text-sm py-4">No exercises. Click "Add Exercise" above.</div>';
@@ -1274,99 +1396,115 @@
 
       function renderAssignClients(selectedIds = []) {
         const container = document.getElementById('assign-clients');
+        if (!container) return;
         if (clients.length === 0) {
           container.innerHTML = '<div class="text-sm text-gray-600">No clients yet. Invite clients first.</div>';
           return;
         }
         container.innerHTML = clients.map(c => `
           <label class="flex items-center gap-3 cursor-pointer">
-            <input type="checkbox" class="assign-cb accent-[#DFFF00]" value="${c.id}" ${selectedIds.includes(c.id) ? 'checked' : ''} />
-            <span class="text-sm text-gray-300">${c.full_name || c.email}</span>
+            <input type="checkbox" class="assign-cb accent-[#DFFF00]" value="${esc(c.id)}" ${selectedIds.includes(c.id) ? 'checked' : ''} />
+            <span class="text-sm text-gray-300">${esc(c.full_name || c.email)}</span>
           </label>`).join('');
       }
 
       function openEditor(plan = null, assignedIds = []) {
         editingPlanId = plan?.id || null;
         exercises = plan ? [...(plan.exercises || [])] : [{ name: '', sets: '', reps: '', note: '' }];
-        document.getElementById('plan-editor').classList.remove('hidden');
+        const editor = document.getElementById('plan-editor');
+        if (!editor) return;
+        editor.classList.remove('hidden');
         document.getElementById('editor-title').textContent = plan ? 'Edit Plan' : 'New Workout Plan';
         document.getElementById('plan-title').value = plan?.title || '';
         document.getElementById('plan-dow').value = plan?.day_of_week ?? '';
         renderExercisesBuilder();
         renderAssignClients(assignedIds);
-        document.getElementById('plan-editor').scrollIntoView({ behavior: 'smooth' });
+        editor.scrollIntoView({ behavior: 'smooth' });
       }
 
       function closeEditor() {
-        document.getElementById('plan-editor').classList.add('hidden');
+        const editor = document.getElementById('plan-editor');
+        if (editor) editor.classList.add('hidden');
         editingPlanId = null;
         exercises = [];
       }
 
       function collectExercises() {
         const builder = document.getElementById('exercises-builder');
+        if (!builder) return [];
         return $$('[data-ex-idx]', builder).map(row => ({
-          name: $('.ex-name', row).value.trim(),
-          sets: $('.ex-sets', row).value.trim(),
-          reps: $('.ex-reps', row).value.trim(),
-          note: $('.ex-note', row).value.trim(),
+          name: $('.ex-name', row)?.value?.trim() || '',
+          sets: $('.ex-sets', row)?.value?.trim() || '',
+          reps: $('.ex-reps', row)?.value?.trim() || '',
+          note: $('.ex-note', row)?.value?.trim() || '',
         })).filter(e => e.name);
       }
 
       setTimeout(async () => {
         await loadPlans();
 
-        document.getElementById('new-plan-btn').onclick = () => openEditor();
-        document.getElementById('cancel-plan-btn').onclick = closeEditor;
-        document.getElementById('add-exercise-btn').onclick = () => {
-          // Collect current values first
-          exercises = collectExercises();
-          exercises.push({ name: '', sets: '', reps: '', note: '' });
-          renderExercisesBuilder();
-        };
+        const newBtn = document.getElementById('new-plan-btn');
+        if (newBtn) newBtn.onclick = () => openEditor();
 
-        document.getElementById('plan-form').onsubmit = async (e) => {
+        const cancelBtn = document.getElementById('cancel-plan-btn');
+        if (cancelBtn) cancelBtn.onclick = closeEditor;
+
+        const addExBtn = document.getElementById('add-exercise-btn');
+        if (addExBtn) {
+          addExBtn.onclick = () => {
+            exercises = collectExercises();
+            exercises.push({ name: '', sets: '', reps: '', note: '' });
+            renderExercisesBuilder();
+          };
+        }
+
+        const planForm = document.getElementById('plan-form');
+        if (!planForm) return;
+        planForm.onsubmit = async (e) => {
           e.preventDefault();
           const btn = document.getElementById('save-plan-btn');
           btn.innerHTML = '<span class="spinner"></span>';
           btn.disabled = true;
 
-          const finalExercises = collectExercises();
-          const title = document.getElementById('plan-title').value.trim();
-          const dow = document.getElementById('plan-dow').value;
+          try {
+            const finalExercises = collectExercises();
+            const title = document.getElementById('plan-title').value.trim();
+            const dow = document.getElementById('plan-dow').value;
 
-          const planData = {
-            trainer_id: currentUser.id,
-            title,
-            day_of_week: dow ? parseInt(dow) : null,
-            exercises: finalExercises,
-            updated_at: new Date().toISOString(),
-          };
+            if (!title) { showToast('Plan title required', true); btn.textContent = 'Save Plan'; btn.disabled = false; return; }
 
-          let planId = editingPlanId;
-          if (editingPlanId) {
-            await supabase.from('workout_plans').update(planData).eq('id', editingPlanId);
-          } else {
-            const { data } = await supabase.from('workout_plans').insert(planData).select().single();
-            planId = data.id;
+            const planData = {
+              trainer_id: currentUser.id,
+              title,
+              day_of_week: dow ? parseInt(dow) : null,
+              exercises: finalExercises,
+              updated_at: new Date().toISOString(),
+            };
+
+            let planId = editingPlanId;
+            if (editingPlanId) {
+              await supabase.from('workout_plans').update(planData).eq('id', editingPlanId);
+            } else {
+              const { data } = await supabase.from('workout_plans').insert(planData).select().single();
+              planId = data.id;
+            }
+
+            const selectedClients = $$('.assign-cb:checked').map(cb => cb.value);
+            await supabase.from('client_workouts').delete().eq('plan_id', planId);
+            if (selectedClients.length > 0) {
+              await supabase.from('client_workouts').insert(
+                selectedClients.map(cid => ({ client_id: cid, plan_id: planId }))
+              );
+            }
+
+            showToast(editingPlanId ? 'Plan updated!' : 'Plan created!');
+            closeEditor();
+            await loadPlans();
+          } catch (err) {
+            showToast('Error saving plan: ' + err.message, true);
           }
-
-          // Handle assignments
-          const selectedClients = $$('.assign-cb:checked').map(cb => cb.value);
-          // Remove old assignments
-          await supabase.from('client_workouts').delete().eq('plan_id', planId);
-          // Insert new
-          if (selectedClients.length > 0) {
-            await supabase.from('client_workouts').insert(
-              selectedClients.map(cid => ({ client_id: cid, plan_id: planId }))
-            );
-          }
-
-          showToast(editingPlanId ? 'Plan updated!' : 'Plan created!');
-          closeEditor();
           btn.textContent = 'Save Plan';
           btn.disabled = false;
-          await loadPlans();
         };
       }, 0);
     });
@@ -1377,33 +1515,30 @@
     route('/portal', async (app) => {
       if (!requireClient(app)) return;
 
+      const firstName = esc((currentProfile?.full_name || '').split(' ')[0] || 'there');
       app.innerHTML = `
       ${navBar(true)}
       <div class="pt-20 pb-12">
         <div class="max-w-2xl mx-auto px-4 sm:px-6">
-          <!-- Greeting -->
           <div class="flex items-center justify-between mb-6 mt-4">
             <div>
-              <h1 class="font-display font-800 text-2xl">Hey, ${currentProfile?.full_name?.split(' ')[0] || 'there'}!</h1>
+              <h1 class="font-display font-800 text-2xl">Hey, ${firstName}!</h1>
               <p class="text-sm text-gray-500" id="portal-date"></p>
             </div>
           </div>
 
-          <!-- Tabs -->
           <div class="flex gap-0 mb-6 border-b border-white/5">
             <button class="portal-tab tab-active flex-1 text-center text-sm font-display font-600 py-3 border-b-2 transition-colors" data-tab="workouts">Workouts</button>
             <button class="portal-tab tab-inactive flex-1 text-center text-sm font-display font-600 py-3 border-b-2 transition-colors" data-tab="checkin">Check-In</button>
             <button class="portal-tab tab-inactive flex-1 text-center text-sm font-display font-600 py-3 border-b-2 transition-colors" data-tab="progress">Progress</button>
           </div>
 
-          <!-- Workouts -->
           <div id="tab-workouts" class="portal-content space-y-4">
             <div id="workout-plans-list" class="space-y-4">
               <div class="text-center text-gray-600 text-sm py-6"><span class="spinner"></span></div>
             </div>
           </div>
 
-          <!-- Check-In -->
           <div id="tab-checkin" class="portal-content hidden space-y-4">
             <div id="past-checkins-portal"></div>
             <div class="card">
@@ -1428,22 +1563,21 @@
                 </div>
                 <div>
                   <label class="text-xs text-gray-400 font-medium block mb-2">Soreness / pain?</label>
-                  <textarea rows="2" id="p-soreness" class="input text-sm resize-none" placeholder="Any aches or tightness?"></textarea>
+                  <textarea rows="2" id="p-soreness" class="input text-sm resize-none" placeholder="Any aches or tightness?" maxlength="500"></textarea>
                 </div>
                 <div>
                   <label class="text-xs text-gray-400 font-medium block mb-2">Bodyweight (lbs)</label>
-                  <input type="number" id="p-bodyweight" class="input text-sm" placeholder="e.g. 158" />
+                  <input type="number" id="p-bodyweight" class="input text-sm" placeholder="e.g. 158" min="50" max="999" step="0.1" />
                 </div>
                 <div>
                   <label class="text-xs text-gray-400 font-medium block mb-2">Goal this week</label>
-                  <textarea rows="2" id="p-goal" class="input text-sm resize-none" placeholder="What are you focused on?"></textarea>
+                  <textarea rows="2" id="p-goal" class="input text-sm resize-none" placeholder="What are you focused on?" maxlength="500"></textarea>
                 </div>
                 <button type="submit" id="p-checkin-btn" class="btn-neon w-full" style="background:#00D4FF">Submit Check-In</button>
               </form>
             </div>
           </div>
 
-          <!-- Progress -->
           <div id="tab-progress" class="portal-content hidden space-y-4">
             <div class="grid grid-cols-2 gap-3">
               <div class="card text-center"><div class="text-xs text-gray-500 mb-1">Workouts Logged</div><div class="font-display font-800 text-2xl text-white" id="p-stat-workouts">0</div></div>
@@ -1462,10 +1596,10 @@
       </div>`;
 
       const now = new Date();
-      document.getElementById('portal-date').textContent = `${DAYS[now.getDay()]}, ${MONTHS[now.getMonth()]} ${now.getDate()} ${YEAR}`;
+      const dateEl = document.getElementById('portal-date');
+      if (dateEl) dateEl.textContent = `${DAYS[now.getDay()]}, ${MONTHS[now.getMonth()]} ${now.getDate()} ${YEAR}`;
 
       setTimeout(async () => {
-        // Tab switching
         let selectedEnergy = '';
 
         $$('.portal-tab').forEach(tab => {
@@ -1473,13 +1607,13 @@
             $$('.portal-tab').forEach(t => { t.classList.remove('tab-active'); t.classList.add('tab-inactive'); });
             tab.classList.remove('tab-inactive'); tab.classList.add('tab-active');
             $$('.portal-content').forEach(c => c.classList.add('hidden'));
-            document.getElementById('tab-' + tab.dataset.tab).classList.remove('hidden');
+            const target = document.getElementById('tab-' + tab.dataset.tab);
+            if (target) target.classList.remove('hidden');
             if (tab.dataset.tab === 'progress') loadProgress();
             if (tab.dataset.tab === 'checkin') loadPastCheckins();
           };
         });
 
-        // Energy buttons
         $$('.p-energy-btn').forEach(btn => {
           btn.onclick = () => {
             $$('.p-energy-btn').forEach(b => { b.className = 'flex-1 py-2 rounded-lg bg-dark-600 text-xs text-gray-400 hover:bg-dark-500 transition-colors p-energy-btn'; });
@@ -1488,147 +1622,186 @@
           };
         });
 
-        // Sleep slider
-        document.getElementById('p-sleep').oninput = function() {
-          document.getElementById('p-sleep-val').textContent = this.value + 'h';
-        };
+        const sleepEl = document.getElementById('p-sleep');
+        if (sleepEl) {
+          sleepEl.oninput = function() {
+            const valEl = document.getElementById('p-sleep-val');
+            if (valEl) valEl.textContent = this.value + 'h';
+          };
+        }
 
         // Load workout plans
-        const { data: assignments } = await supabase.from('client_workouts').select('plan_id, workout_plans(*)').eq('client_id', currentUser.id);
-        const plansList = document.getElementById('workout-plans-list');
+        try {
+          const { data: assignments } = await supabase.from('client_workouts')
+            .select('plan_id, workout_plans(*)').eq('client_id', currentUser.id);
+          const plansList = document.getElementById('workout-plans-list');
+          if (!plansList) return;
 
-        if (!assignments || assignments.length === 0) {
-          plansList.innerHTML = '<div class="card text-center py-8"><p class="text-gray-500">No workout plans assigned yet. Your trainer will add them soon!</p></div>';
-        } else {
-          plansList.innerHTML = assignments.map(a => {
-            const plan = a.workout_plans;
-            if (!plan) return '';
-            const exs = plan.exercises || [];
-            const dayLabel = plan.day_of_week !== null ? DAYS[plan.day_of_week] : 'Any day';
-            return `
-              <div class="card">
-                <div class="flex items-center justify-between mb-3">
-                  <div>
-                    <div class="text-xs text-neon font-display font-600">${dayLabel.toUpperCase()}</div>
-                    <div class="font-display font-700 text-white">${plan.title}</div>
+          if (!assignments || assignments.length === 0) {
+            plansList.innerHTML = '<div class="card text-center py-8"><p class="text-gray-500">No workout plans assigned yet. Your trainer will add them soon!</p></div>';
+          } else {
+            plansList.innerHTML = assignments.map(a => {
+              const plan = a.workout_plans;
+              if (!plan) return '';
+              const exs = plan.exercises || [];
+              const dayLabel = plan.day_of_week !== null ? DAYS[plan.day_of_week] : 'Any day';
+              return `
+                <div class="card">
+                  <div class="flex items-center justify-between mb-3">
+                    <div>
+                      <div class="text-xs text-neon font-display font-600">${dayLabel.toUpperCase()}</div>
+                      <div class="font-display font-700 text-white">${esc(plan.title)}</div>
+                    </div>
+                    <a href="#/portal/workout/${esc(plan.id)}" class="btn-neon text-xs px-4 py-2">Start</a>
                   </div>
-                  <a href="#/portal/workout/${plan.id}" class="btn-neon text-xs px-4 py-2">Start</a>
-                </div>
-                <div class="space-y-1.5">
-                  ${exs.slice(0, 4).map((ex, i) => `
-                    <div class="flex items-center gap-3 bg-dark-600/50 rounded-lg p-2">
-                      <span class="text-neon font-display font-700 text-[10px] w-5">${String(i+1).padStart(2,'0')}</span>
-                      <span class="text-xs text-white flex-1">${ex.name}</span>
-                      <span class="text-[10px] text-gray-500">${ex.sets} &times; ${ex.reps}</span>
-                    </div>`).join('')}
-                  ${exs.length > 4 ? `<div class="text-center text-[10px] text-gray-600">+${exs.length - 4} more exercises</div>` : ''}
-                </div>
-              </div>`;
-          }).join('');
+                  <div class="space-y-1.5">
+                    ${exs.slice(0, 4).map((ex, i) => `
+                      <div class="flex items-center gap-3 bg-dark-600/50 rounded-lg p-2">
+                        <span class="text-neon font-display font-700 text-[10px] w-5">${String(i+1).padStart(2,'0')}</span>
+                        <span class="text-xs text-white flex-1">${esc(ex.name)}</span>
+                        <span class="text-[10px] text-gray-500">${esc(ex.sets)} &times; ${esc(ex.reps)}</span>
+                      </div>`).join('')}
+                    ${exs.length > 4 ? `<div class="text-center text-[10px] text-gray-600">+${exs.length - 4} more exercises</div>` : ''}
+                  </div>
+                </div>`;
+            }).join('');
+          }
+        } catch (err) {
+          console.error('Portal load error:', err);
         }
 
         // Check-in form
-        document.getElementById('portal-checkin-form').onsubmit = async (e) => {
-          e.preventDefault();
-          const btn = document.getElementById('p-checkin-btn');
-          btn.innerHTML = '<span class="spinner"></span>';
-          btn.disabled = true;
+        const checkinForm = document.getElementById('portal-checkin-form');
+        if (checkinForm) {
+          checkinForm.onsubmit = async (e) => {
+            e.preventDefault();
+            const btn = document.getElementById('p-checkin-btn');
+            btn.innerHTML = '<span class="spinner"></span>';
+            btn.disabled = true;
 
-          const { error } = await supabase.from('checkins').insert({
-            client_id: currentUser.id,
-            energy: selectedEnergy || null,
-            sleep: parseFloat(document.getElementById('p-sleep').value),
-            soreness: document.getElementById('p-soreness').value,
-            bodyweight: document.getElementById('p-bodyweight').value ? parseFloat(document.getElementById('p-bodyweight').value) : null,
-            goal: document.getElementById('p-goal').value,
-          });
+            const bwVal = document.getElementById('p-bodyweight').value;
+            const bw = bwVal ? parseFloat(bwVal) : null;
 
-          if (error) {
-            showToast('Failed to submit: ' + error.message, true);
-          } else {
-            showToast('Check-in submitted!');
-            document.getElementById('portal-checkin-form').reset();
-            document.getElementById('p-sleep-val').textContent = '7h';
-            $$('.p-energy-btn').forEach(b => { b.className = 'flex-1 py-2 rounded-lg bg-dark-600 text-xs text-gray-400 hover:bg-dark-500 transition-colors p-energy-btn'; });
-            selectedEnergy = '';
-            loadPastCheckins();
-          }
-          btn.textContent = 'Submit Check-In';
-          btn.style.background = '#00D4FF';
-          btn.disabled = false;
-        };
+            if (bw !== null && (bw < 50 || bw > 999)) {
+              showToast('Bodyweight must be between 50 and 999 lbs', true);
+              btn.textContent = 'Submit Check-In';
+              btn.style.background = '#00D4FF';
+              btn.disabled = false;
+              return;
+            }
+
+            const { error } = await supabase.from('checkins').insert({
+              client_id: currentUser.id,
+              energy: selectedEnergy || null,
+              sleep: parseFloat(document.getElementById('p-sleep').value),
+              soreness: document.getElementById('p-soreness').value.trim().slice(0, 500),
+              bodyweight: bw,
+              goal: document.getElementById('p-goal').value.trim().slice(0, 500),
+            });
+
+            if (error) {
+              showToast('Failed to submit: ' + error.message, true);
+            } else {
+              showToast('Check-in submitted!');
+              checkinForm.reset();
+              const sleepValEl = document.getElementById('p-sleep-val');
+              if (sleepValEl) sleepValEl.textContent = '7h';
+              $$('.p-energy-btn').forEach(b => { b.className = 'flex-1 py-2 rounded-lg bg-dark-600 text-xs text-gray-400 hover:bg-dark-500 transition-colors p-energy-btn'; });
+              selectedEnergy = '';
+              loadPastCheckins();
+            }
+            btn.textContent = 'Submit Check-In';
+            btn.style.background = '#00D4FF';
+            btn.disabled = false;
+          };
+        }
 
         async function loadPastCheckins() {
-          const { data: checkins } = await supabase.from('checkins').select('*').eq('client_id', currentUser.id).order('submitted_at', { ascending: false }).limit(5);
-          const container = document.getElementById('past-checkins-portal');
-          if (!checkins || checkins.length === 0) { container.innerHTML = ''; return; }
-          container.innerHTML = `
-            <div class="card mb-3">
-              <div class="text-xs font-display font-600 text-gray-400 mb-3">PAST CHECK-INS</div>
-              ${checkins.map(c => `
-                <div class="flex items-center justify-between py-2 border-b border-white/5 last:border-0">
-                  <div>
-                    <div class="text-xs text-white">${formatDate(c.submitted_at)}</div>
-                    <div class="text-[10px] text-gray-500">${c.energy || '-'} energy &bull; ${c.sleep || '-'}h sleep${c.bodyweight ? ' &bull; ' + c.bodyweight + ' lbs' : ''}</div>
-                  </div>
-                  <div class="w-5 h-5 rounded bg-electric/10 flex items-center justify-center">
-                    <i data-lucide="check" class="w-3 h-3 text-electric"></i>
-                  </div>
-                </div>`).join('')}
-            </div>`;
-          lucide.createIcons();
+          try {
+            const { data: checkins } = await supabase.from('checkins').select('*')
+              .eq('client_id', currentUser.id).order('submitted_at', { ascending: false }).limit(5);
+            const container = document.getElementById('past-checkins-portal');
+            if (!container) return;
+            if (!checkins || checkins.length === 0) { container.innerHTML = ''; return; }
+            container.innerHTML = `
+              <div class="card mb-3">
+                <div class="text-xs font-display font-600 text-gray-400 mb-3">PAST CHECK-INS</div>
+                ${checkins.map(c => `
+                  <div class="flex items-center justify-between py-2 border-b border-white/5 last:border-0">
+                    <div>
+                      <div class="text-xs text-white">${formatDate(c.submitted_at)}</div>
+                      <div class="text-[10px] text-gray-500">${esc(c.energy || '-')} energy &bull; ${esc(c.sleep || '-')}h sleep${c.bodyweight ? ' &bull; ' + esc(c.bodyweight) + ' lbs' : ''}</div>
+                    </div>
+                    <div class="w-5 h-5 rounded bg-electric/10 flex items-center justify-center">
+                      <i data-lucide="check" class="w-3 h-3 text-electric"></i>
+                    </div>
+                  </div>`).join('')}
+              </div>`;
+            lucide.createIcons();
+          } catch (err) {
+            console.error('Load checkins error:', err);
+          }
         }
 
         async function loadProgress() {
-          const { data: checkins } = await supabase.from('checkins').select('*').eq('client_id', currentUser.id).order('submitted_at', { ascending: true });
-          const { data: logs } = await supabase.from('workout_logs').select('*').eq('client_id', currentUser.id);
+          try {
+            const { data: checkins } = await supabase.from('checkins').select('*')
+              .eq('client_id', currentUser.id).order('submitted_at', { ascending: true });
+            const { data: logs } = await supabase.from('workout_logs').select('*')
+              .eq('client_id', currentUser.id);
 
-          document.getElementById('p-stat-checkins').textContent = checkins?.length || 0;
+            const statCheckins = document.getElementById('p-stat-checkins');
+            if (statCheckins) statCheckins.textContent = checkins?.length || 0;
 
-          // Count distinct workout sessions (by day)
-          const sessionDays = new Set();
-          (logs || []).filter(l => l.completed).forEach(l => sessionDays.add(new Date(l.logged_at).toDateString()));
-          document.getElementById('p-stat-workouts').textContent = sessionDays.size;
+            const sessionDays = new Set();
+            (logs || []).filter(l => l.completed).forEach(l => sessionDays.add(new Date(l.logged_at).toDateString()));
+            const statWorkouts = document.getElementById('p-stat-workouts');
+            if (statWorkouts) statWorkouts.textContent = sessionDays.size;
 
-          // Weight chart
-          const weightData = (checkins || []).filter(c => c.bodyweight).slice(-8);
-          const chart = document.getElementById('p-weight-chart');
-          if (weightData.length >= 2) {
-            const weights = weightData.map(c => c.bodyweight);
-            const max = Math.max(...weights), min = Math.min(...weights);
-            const range = max - min || 1;
-            chart.innerHTML = weightData.map((c, i) => {
-              const pct = Math.max(20, ((c.bodyweight - min) / range) * 80 + 20);
-              const isLast = i === weightData.length - 1;
-              return `<div class="flex-1 flex flex-col items-center gap-1">
-                <div class="text-[8px] ${isLast ? 'text-neon font-bold' : 'text-gray-500'}">${c.bodyweight}</div>
-                <div class="w-full rounded-t ${isLast ? 'bg-neon' : 'bg-neon/30'}" style="height:${pct}%"></div>
-                <span class="text-[9px] ${isLast ? 'text-neon' : 'text-gray-600'}">${MONTHS[new Date(c.submitted_at).getMonth()].slice(0,3)}</span>
-              </div>`;
-            }).join('');
-          } else {
-            chart.innerHTML = '<div class="text-center text-gray-600 text-xs w-full py-8">Submit check-ins with weight to see trend</div>';
-          }
+            const weightData = (checkins || []).filter(c => c.bodyweight).slice(-8);
+            const chart = document.getElementById('p-weight-chart');
+            if (chart) {
+              if (weightData.length >= 2) {
+                const weights = weightData.map(c => c.bodyweight);
+                const max = Math.max(...weights), min = Math.min(...weights);
+                const range = max - min || 1;
+                chart.innerHTML = weightData.map((c, i) => {
+                  const pct = Math.max(20, ((c.bodyweight - min) / range) * 80 + 20);
+                  const isLast = i === weightData.length - 1;
+                  return `<div class="flex-1 flex flex-col items-center gap-1">
+                    <div class="text-[8px] ${isLast ? 'text-neon font-bold' : 'text-gray-500'}">${esc(c.bodyweight)}</div>
+                    <div class="w-full rounded-t ${isLast ? 'bg-neon' : 'bg-neon/30'}" style="height:${pct}%"></div>
+                    <span class="text-[9px] ${isLast ? 'text-neon' : 'text-gray-600'}">${MONTHS[new Date(c.submitted_at).getMonth()].slice(0,3)}</span>
+                  </div>`;
+                }).join('');
+              } else {
+                chart.innerHTML = '<div class="text-center text-gray-600 text-xs w-full py-8">Submit check-ins with weight to see trend</div>';
+              }
+            }
 
-          // Activity
-          const actContainer = document.getElementById('p-activity');
-          const activities = [];
-          (checkins || []).slice(-3).reverse().forEach(c => {
-            activities.push({ text: `Check-in: ${c.energy || '-'} energy, ${c.sleep}h sleep`, time: c.submitted_at });
-          });
-          (logs || []).filter(l => l.completed).slice(-3).reverse().forEach(l => {
-            activities.push({ text: `Logged exercise${l.weight ? ' @ ' + l.weight + ' lbs' : ''}`, time: l.logged_at });
-          });
-          activities.sort((a, b) => new Date(b.time) - new Date(a.time));
+            const actContainer = document.getElementById('p-activity');
+            if (actContainer) {
+              const activities = [];
+              (checkins || []).slice(-3).reverse().forEach(c => {
+                activities.push({ text: `Check-in: ${esc(c.energy || '-')} energy, ${esc(c.sleep)}h sleep`, time: c.submitted_at });
+              });
+              (logs || []).filter(l => l.completed).slice(-3).reverse().forEach(l => {
+                activities.push({ text: `Logged exercise${l.weight ? ' @ ' + esc(l.weight) + ' lbs' : ''}`, time: l.logged_at });
+              });
+              activities.sort((a, b) => new Date(b.time) - new Date(a.time));
 
-          if (activities.length === 0) {
-            actContainer.innerHTML = '<div class="text-center text-gray-600 text-xs py-4">No activity yet</div>';
-          } else {
-            actContainer.innerHTML = activities.slice(0, 5).map(a => `
-              <div class="flex items-center gap-3">
-                <div class="w-1.5 h-1.5 rounded-full bg-neon/50"></div>
-                <div class="flex-1"><div class="text-[11px] text-gray-300">${a.text}</div><div class="text-[9px] text-gray-600">${timeAgo(a.time)}</div></div>
-              </div>`).join('');
+              if (activities.length === 0) {
+                actContainer.innerHTML = '<div class="text-center text-gray-600 text-xs py-4">No activity yet</div>';
+              } else {
+                actContainer.innerHTML = activities.slice(0, 5).map(a => `
+                  <div class="flex items-center gap-3">
+                    <div class="w-1.5 h-1.5 rounded-full bg-neon/50"></div>
+                    <div class="flex-1"><div class="text-[11px] text-gray-300">${a.text}</div><div class="text-[9px] text-gray-600">${timeAgo(a.time)}</div></div>
+                  </div>`).join('');
+              }
+            }
+          } catch (err) {
+            console.error('Progress load error:', err);
           }
         }
 
@@ -1643,14 +1816,18 @@
     route('/portal/workout/:planId', async (app, params) => {
       if (!requireClient(app)) return;
 
-      // Load plan
+      // Validate planId format (UUID)
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(params.planId)) {
+        navigate('/portal');
+        return;
+      }
+
       const { data: plan } = await supabase.from('workout_plans').select('*').eq('id', params.planId).single();
       if (!plan) { navigate('/portal'); return; }
 
       const exercises = plan.exercises || [];
       const todayKey = new Date().toISOString().split('T')[0];
 
-      // Load today's logs for this plan
       const { data: existingLogs } = await supabase.from('workout_logs').select('*')
         .eq('client_id', currentUser.id).eq('plan_id', plan.id)
         .gte('logged_at', todayKey + 'T00:00:00').lte('logged_at', todayKey + 'T23:59:59');
@@ -1661,6 +1838,9 @@
       let timerStart = null;
       let timerInterval = null;
 
+      // Clean up timer on route change
+      registerCleanup(() => { if (timerInterval) clearInterval(timerInterval); });
+
       app.innerHTML = `
       ${navBar(true)}
       <div class="pt-20 pb-12">
@@ -1670,7 +1850,7 @@
               <i data-lucide="arrow-left" class="w-5 h-5 text-gray-400"></i>
             </a>
             <div class="flex-1">
-              <h1 class="font-display font-800 text-xl">${plan.title}</h1>
+              <h1 class="font-display font-800 text-xl">${esc(plan.title)}</h1>
               <p class="text-xs text-gray-500">${exercises.length} exercises</p>
             </div>
             <div class="text-sm text-gray-400 bg-dark-700 px-3 py-1.5 rounded-lg font-display font-600" id="w-timer">0:00</div>
@@ -1686,6 +1866,7 @@
 
       function renderWorkout() {
         const container = document.getElementById('w-exercises');
+        if (!container) return;
         let doneCount = 0;
 
         container.innerHTML = exercises.map((ex, i) => {
@@ -1701,11 +1882,11 @@
                   : `<span class="text-neon font-display font-800 text-xs">${String(i+1).padStart(2,'0')}</span>`}
               </div>
               <div class="flex-1 min-w-0">
-                <div class="text-sm font-medium ${done ? 'text-gray-600 line-through' : 'text-white'}">${ex.name}</div>
-                <div class="text-[11px] text-gray-500">${ex.sets} sets &times; ${ex.reps}${ex.note ? ' &bull; ' + ex.note : ''}</div>
+                <div class="text-sm font-medium ${done ? 'text-gray-600 line-through' : 'text-white'}">${esc(ex.name)}</div>
+                <div class="text-[11px] text-gray-500">${esc(ex.sets)} sets &times; ${esc(ex.reps)}${ex.note ? ' &bull; ' + esc(ex.note) : ''}</div>
               </div>
               <input type="text" inputmode="decimal" class="weight-input w-ex-weight" data-idx="${i}"
-                placeholder="lbs" value="${log?.weight || ''}" ${!timerStart ? 'disabled' : ''} />
+                placeholder="lbs" value="${esc(log?.weight || '')}" ${!timerStart ? 'disabled' : ''} />
               <button class="w-8 h-8 rounded-lg flex items-center justify-center transition-colors w-ex-done
                 ${done ? 'bg-neon/20 text-neon' : 'bg-dark-500 text-gray-600 hover:text-neon hover:bg-neon/10'}"
                 data-idx="${i}" ${!timerStart ? 'disabled' : ''}>
@@ -1714,17 +1895,21 @@
             </div>`;
         }).join('');
 
-        document.getElementById('w-count').textContent = `${doneCount}/${exercises.length}`;
+        const countEl = document.getElementById('w-count');
+        if (countEl) countEl.textContent = `${doneCount}/${exercises.length}`;
 
-        // Weight inputs
         $$('.w-ex-weight', container).forEach(input => {
           input.onchange = async () => {
             const idx = parseInt(input.dataset.idx);
-            await upsertLog(idx, { weight: parseFloat(input.value) || null });
+            const val = parseFloat(input.value);
+            if (input.value && (isNaN(val) || val < 0 || val > 9999)) {
+              showToast('Invalid weight', true);
+              return;
+            }
+            await upsertLog(idx, { weight: val || null });
           };
         });
 
-        // Done toggles
         $$('.w-ex-done', container).forEach(btn => {
           btn.onclick = async () => {
             if (!timerStart) return;
@@ -1735,11 +1920,11 @@
             await upsertLog(idx, { completed: !currentlyDone, weight });
             renderWorkout();
 
-            // Check if all done
             const allDone = exercises.every((_, i) => logMap[i]?.completed);
             if (allDone) {
               showToast('Workout complete! Great session!');
-              triggerConfetti(document.getElementById('w-count'));
+              const countEl = document.getElementById('w-count');
+              if (countEl) triggerConfetti(countEl);
             }
           };
         });
@@ -1766,39 +1951,44 @@
       setTimeout(() => {
         renderWorkout();
 
-        // If there are existing logs, resume timer
         if (Object.keys(logMap).length > 0 && !timerStart) {
-          // Estimate start from earliest log
           const earliest = Object.values(logMap).sort((a, b) => new Date(a.logged_at) - new Date(b.logged_at))[0];
           timerStart = new Date(earliest.logged_at).getTime();
           function tick() {
+            const el = document.getElementById('w-timer');
+            if (!el) { clearInterval(timerInterval); return; }
             const s = Math.floor((Date.now() - timerStart) / 1000);
-            document.getElementById('w-timer').textContent = `${Math.floor(s/60)}:${(s%60).toString().padStart(2,'0')}`;
+            el.textContent = `${Math.floor(s/60)}:${(s%60).toString().padStart(2,'0')}`;
           }
           tick();
           timerInterval = setInterval(tick, 1000);
           renderWorkout();
         }
 
-        document.getElementById('w-start-btn').onclick = () => {
-          if (timerStart) return;
-          timerStart = Date.now();
-          function tick() {
-            const s = Math.floor((Date.now() - timerStart) / 1000);
-            document.getElementById('w-timer').textContent = `${Math.floor(s/60)}:${(s%60).toString().padStart(2,'0')}`;
-          }
-          tick();
-          timerInterval = setInterval(tick, 1000);
-          document.getElementById('w-start-btn').textContent = 'Workout In Progress...';
-          document.getElementById('w-start-btn').classList.add('opacity-50');
-          showToast('Let\'s go!');
-          renderWorkout();
-        };
+        const startBtn = document.getElementById('w-start-btn');
+        if (startBtn) {
+          startBtn.onclick = () => {
+            if (timerStart) return;
+            timerStart = Date.now();
+            function tick() {
+              const el = document.getElementById('w-timer');
+              if (!el) { clearInterval(timerInterval); return; }
+              const s = Math.floor((Date.now() - timerStart) / 1000);
+              el.textContent = `${Math.floor(s/60)}:${(s%60).toString().padStart(2,'0')}`;
+            }
+            tick();
+            timerInterval = setInterval(tick, 1000);
+            startBtn.textContent = 'Workout In Progress...';
+            startBtn.classList.add('opacity-50');
+            showToast("Let's go!");
+            renderWorkout();
+          };
+        }
       }, 0);
     });
 
     // =============================================
-    // GLOBAL HELPERS (exposed for onclick handlers)
+    // GLOBAL HELPERS
     // =============================================
     window.GTW = {
       logout: async () => {
