@@ -13,6 +13,9 @@ exports.handler = async (event) => {
 
   try {
     const sig = event.headers['stripe-signature'];
+    if (!sig) {
+      return { statusCode: 400, body: 'Missing stripe-signature header' };
+    }
     stripeEvent = stripe.webhooks.constructEvent(event.body, sig, endpointSecret);
   } catch (err) {
     console.error('Webhook signature verification failed:', err.message);
@@ -28,11 +31,38 @@ exports.handler = async (event) => {
       return { statusCode: 400, body: 'Missing user ID in metadata' };
     }
 
-    // Update profile in Supabase using service role key (bypasses RLS)
+    // Validate UUID format
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(userId)) {
+      console.error('Invalid user ID format:', userId);
+      return { statusCode: 400, body: 'Invalid user ID format' };
+    }
+
     const supabase = createClient(
       process.env.SUPABASE_URL,
       process.env.SUPABASE_SERVICE_KEY
     );
+
+    // Verify user exists and is a trainer before updating
+    const { data: profile, error: fetchErr } = await supabase
+      .from('profiles')
+      .select('id, role, has_paid')
+      .eq('id', userId)
+      .single();
+
+    if (fetchErr || !profile) {
+      console.error('Profile not found for user:', userId);
+      return { statusCode: 400, body: 'User not found' };
+    }
+
+    if (profile.role !== 'trainer') {
+      console.error('Non-trainer payment attempt:', userId);
+      return { statusCode: 400, body: 'Invalid user role' };
+    }
+
+    if (profile.has_paid) {
+      console.log(`User ${userId} already marked as paid. Skipping.`);
+      return { statusCode: 200, body: JSON.stringify({ received: true }) };
+    }
 
     const { error } = await supabase
       .from('profiles')
