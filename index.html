@@ -246,31 +246,53 @@
       return null;
     }
 
+    let _routing = false;
     async function handleRoute() {
-      const path = getRoute();
-      const app = document.getElementById('app');
+      if (_routing) return;
+      _routing = true;
+      try {
+        const path = getRoute();
+        const app = document.getElementById('app');
 
-      // Check auth state
-      const { data: { session } } = await supabase.auth.getSession();
-      currentUser = session?.user || null;
+        // Check auth state
+        const { data: { session } } = await supabase.auth.getSession();
+        currentUser = session?.user || null;
 
-      if (currentUser) {
-        const { data } = await supabase.from('profiles').select('*').eq('id', currentUser.id).single();
-        currentProfile = data;
-      } else {
-        currentProfile = null;
+        if (currentUser) {
+          const { data, error } = await supabase.from('profiles').select('*').eq('id', currentUser.id).maybeSingle();
+          if (error) {
+            console.error('Profile fetch error:', error.message);
+            // Profile might not exist yet (trigger failed or race condition)
+            // Create it manually as fallback
+            const meta = currentUser.user_metadata || {};
+            const { data: newProfile, error: insertErr } = await supabase.from('profiles').upsert({
+              id: currentUser.id,
+              role: meta.role || 'trainer',
+              full_name: meta.full_name || '',
+              email: currentUser.email || '',
+              invite_code: meta.role === 'client' ? null : Math.random().toString(36).slice(2, 14),
+            }).select().single();
+            currentProfile = insertErr ? null : newProfile;
+          } else {
+            currentProfile = data;
+          }
+        } else {
+          currentProfile = null;
+        }
+
+        const matched = matchRoute(path);
+        if (matched) {
+          await matched.handler(app, matched.params);
+        } else {
+          app.innerHTML = render404();
+        }
+        lucide.createIcons();
+      } finally {
+        _routing = false;
       }
-
-      const matched = matchRoute(path);
-      if (matched) {
-        await matched.handler(app, matched.params);
-      } else {
-        app.innerHTML = render404();
-      }
-      lucide.createIcons();
     }
 
-    window.addEventListener('hashchange', handleRoute);
+    window.addEventListener('hashchange', () => handleRoute());
 
     function render404() {
       return `
