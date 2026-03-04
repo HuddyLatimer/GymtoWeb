@@ -260,6 +260,7 @@
 
     let _routeTimer = null;
     let _routing = false;
+    let _skipProfileRefresh = false;
 
     async function handleRoute() {
       if (_routing) return;
@@ -273,25 +274,29 @@
         currentUser = session?.user || null;
 
         if (currentUser) {
-          // Profile may not exist immediately after signup (trigger race).
-          // Retry up to 5 times with increasing delay.
-          let profile = null;
-          for (let attempt = 0; attempt < 5; attempt++) {
-            const { data, error } = await supabase.from('profiles')
-              .select('*').eq('id', currentUser.id).maybeSingle();
-            console.log(`[GTW] Profile fetch attempt ${attempt + 1}:`, { data, error: error?.message });
-            if (data) {
-              profile = data;
-              break;
+          // If we just completed payment, skip re-fetching (would overwrite has_paid=true)
+          if (_skipProfileRefresh && currentProfile) {
+            _skipProfileRefresh = false;
+          } else {
+            // Profile may not exist immediately after signup (trigger race).
+            // Retry up to 5 times with increasing delay.
+            let profile = null;
+            for (let attempt = 0; attempt < 5; attempt++) {
+              const { data, error } = await supabase.from('profiles')
+                .select('*').eq('id', currentUser.id).maybeSingle();
+              console.log(`[GTW] Profile fetch attempt ${attempt + 1}:`, { data, error: error?.message });
+              if (data) {
+                profile = data;
+                break;
+              }
+              if (attempt < 4) await new Promise(r => setTimeout(r, 800 * (attempt + 1)));
             }
-            if (attempt < 4) await new Promise(r => setTimeout(r, 800 * (attempt + 1)));
-          }
-          currentProfile = profile;
+            currentProfile = profile;
 
-          // If still no profile after all retries, the trigger may have failed.
-          // Log it so we can debug.
-          if (!profile) {
-            console.warn('[GTW] No profile found after 5 attempts for user:', currentUser.id);
+            // If still no profile after all retries, the trigger may have failed.
+            if (!profile) {
+              console.warn('[GTW] No profile found after 5 attempts for user:', currentUser.id);
+            }
           }
         } else {
           currentProfile = null;
@@ -1111,10 +1116,22 @@
               } else if (paymentIntent.status === 'succeeded') {
                 showToast('Payment successful! Welcome aboard!');
                 triggerConfetti(payBtn);
-                // Don't trust client-side update alone — webhook will confirm.
-                // But update locally for instant UX
+                payBtn.textContent = 'Activating your portal...';
+
+                // Poll for webhook to update has_paid in DB
+                // (webhook may take a few seconds to fire)
+                let paid = false;
+                for (let i = 0; i < 10; i++) {
+                  await new Promise(r => setTimeout(r, 1500));
+                  const { data: p } = await supabase.from('profiles')
+                    .select('has_paid').eq('id', currentUser.id).maybeSingle();
+                  if (p?.has_paid) { paid = true; break; }
+                }
+
+                // Update local state regardless — payment DID succeed
                 currentProfile.has_paid = true;
-                setTimeout(() => navigate('/dashboard'), 1500);
+                _skipProfileRefresh = true;
+                navigate('/dashboard');
               }
             } catch (err) {
               const errEl = document.getElementById('card-errors');
