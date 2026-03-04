@@ -1118,17 +1118,26 @@
                 triggerConfetti(payBtn);
                 payBtn.textContent = 'Activating your portal...';
 
-                // Poll for webhook to update has_paid in DB
-                // (webhook may take a few seconds to fire)
-                let paid = false;
-                for (let i = 0; i < 10; i++) {
-                  await new Promise(r => setTimeout(r, 1500));
-                  const { data: p } = await supabase.from('profiles')
-                    .select('has_paid').eq('id', currentUser.id).maybeSingle();
-                  if (p?.has_paid) { paid = true; break; }
+                // Call server to verify payment and update has_paid in DB
+                try {
+                  const sess = await supabase.auth.getSession();
+                  const confirmRes = await fetch('/.netlify/functions/confirm-payment', {
+                    method: 'POST',
+                    headers: {
+                      'Content-Type': 'application/json',
+                      'Authorization': 'Bearer ' + sess.data.session.access_token,
+                    },
+                    body: JSON.stringify({ paymentIntentId: paymentIntent.id }),
+                  });
+                  const confirmData = await confirmRes.json();
+                  if (!confirmRes.ok) {
+                    console.error('[GTW] confirm-payment failed:', confirmData);
+                  }
+                } catch (confirmErr) {
+                  console.error('[GTW] confirm-payment error:', confirmErr);
                 }
 
-                // Update local state regardless — payment DID succeed
+                // Update local state — payment confirmed server-side
                 currentProfile.has_paid = true;
                 _skipProfileRefresh = true;
                 navigate('/dashboard');
